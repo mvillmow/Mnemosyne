@@ -1,13 +1,13 @@
 ---
 name: automation-loop-early-exit-zero-work-convergence
-description: "How to wire and test early-exit in hephaestus-automation-loop when a full pass produces zero new work, and how to keep the human-facing per-loop summary consistent with the machine convergence signal. Use when: (1) implementing loop convergence detection in run_loop, (2) adding tests for early-exit stub placeholders, (3) diagnosing whether early-exit scaffold already exists before implementing, (4) auditing a per-loop/iteration summary that contradicts the early-exit message."
+description: "How to wire and test early-exit in hephaestus-automation-loop when a full pass produces zero new work, keep the human-facing per-loop summary consistent with the machine convergence signal, and review plans that centralize work-report write-on-exit behavior. Use when: (1) implementing loop convergence detection in run_loop, (2) adding tests for early-exit stub placeholders, (3) diagnosing whether early-exit scaffold already exists before implementing, (4) auditing a per-loop/iteration summary that contradicts the early-exit message, (5) reviewing a plan that extracts HEPH_WORK_REPORT handling into a context manager."
 category: tooling
-date: 2026-06-21
-version: "1.1.0"
+date: 2026-06-26
+version: "1.2.0"
 user-invocable: false
-verification: verified-local
+verification: unverified
 history: automation-loop-early-exit-zero-work-convergence.history
-tags: [automation, loop-runner, early-exit, convergence, testing, summary, work-units]
+tags: [automation, loop-runner, early-exit, convergence, testing, summary, work-units, work-report, contextmanager, planning-risk, planner]
 ---
 
 # Automation Loop Early-Exit on Zero-Work Pass
@@ -16,10 +16,10 @@ tags: [automation, loop-runner, early-exit, convergence, testing, summary, work-
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-06-21 (v1.1.0); 2026-05-28 (v1.0.0) |
-| **Objective** | Break `run_loop` when a full pass produces 0 new work AND keep the human-facing per-loop summary (`_summarize_loop`) reading the same `work_units` signal the early-exit predicate reads, so the two never contradict each other |
-| **Outcome** | Successful — v1.0.0 early-exit (PR #669); v1.1.0 summary/convergence consistency fix (PR #1564 / issue #1563) |
-| **Verification** | verified-local (pre-commit + pytest; CI pending for #1564) |
+| **Date** | 2026-06-26 (v1.2.0); 2026-06-21 (v1.1.0); 2026-05-28 (v1.0.0) |
+| **Objective** | Break `run_loop` when a full pass produces 0 new work, keep the human-facing per-loop summary (`_summarize_loop`) reading the same `work_units` signal the early-exit predicate reads, and review plans that centralize `HEPH_WORK_REPORT` write-on-exit behavior |
+| **Outcome** | v1.0.0/v1.1.0 implementation guidance succeeded locally; v1.2.0 adds an unexecuted plan-review risk checklist for issue #1390 |
+| **Verification** | unverified for v1.2.0 planning-risk addition; earlier v1.1.0 content was verified-local |
 | **History** | [changelog](./automation-loop-early-exit-zero-work-convergence.history) |
 
 ## When to Use
@@ -30,8 +30,15 @@ tags: [automation, loop-runner, early-exit, convergence, testing, summary, work-
 - Adding new loop-convergence phases (must add to `_CONVERGENCE_PHASES` AND call `write_work_report`)
 - **Auditing a human-facing per-loop / per-iteration summary** (e.g. `_summarize_loop`) that contradicts the early-exit / convergence message — grep for `+= 1` next to a phase-name check; it likely counts "phase ran" instead of "phase did work"
 - Deciding whether a fully-filtered issue set should warn or stay silent (explicit `--issues` vs auto-discovery)
+- Reviewing or implementing a refactor that extracts repeated `HEPH_WORK_REPORT` handling into a context manager such as `work_report_context(work_units_fn)`
+- Checking whether all meaningful planner / plan-reviewer returns, exceptions, rate-limit exits, and `KeyboardInterrupt` paths are inside the report-writing context
+- Updating tests that previously patched direct `write_work_report` imports after the symbol moves behind a shared context helper
 
 ## Verified Workflow
+
+> **Warning:** The v1.2.0 work-report context-manager review checklist is unverified. It was derived
+> from an implementation plan, not from an executed patch or CI run. Treat that checklist as a
+> hypothesis until tests and the loop runner validate the behavior.
 
 ### Quick Reference
 
@@ -88,6 +95,53 @@ def test_early_exit_fires(tmp_path):
    pixi run ruff check hephaestus/automation/loop_runner.py
    pixi run pytest tests/unit/automation/ -q --no-cov
    ```
+
+### Proposed Workflow: Work-Report Context Manager Plan Review (v1.2.0, UNVERIFIED)
+
+When a plan centralizes `HEPH_WORK_REPORT` behavior into a context manager such as
+`work_report_context(work_units_fn)`, review it as an exit-path contract change, not as a
+mechanical DRY cleanup.
+
+### Quick Reference: Work-Report Context Risk Audit
+
+```bash
+# 1. Locate every direct report writer/import that should move behind the shared context.
+rg -n "HEPH_WORK_REPORT|write_work_report|work_report_context" hephaestus tests pyproject.toml
+
+# 2. For each CLI main(), list returns/exits before approving the context placement.
+rg -n "return |sys\\.exit|KeyboardInterrupt|rate.limit|rate-limit" hephaestus/automation/planner.py hephaestus/automation/plan_reviewer.py
+
+# 3. Confirm tests assert the observable report file, not only a patched helper call.
+rg -n "HEPH_WORK_REPORT|write_work_report|work_units|work_report" tests/unit/automation
+
+# 4. Type-check the context-manager signature if it uses contextlib.contextmanager.
+pixi run mypy hephaestus/
+```
+
+### Detailed Review Checklist
+
+1. **No-op semantics must stay exact when `HEPH_WORK_REPORT` is absent.** The context should avoid
+   creating files, evaluating `work_units_fn`, or changing control flow unless reporting was active at
+   entry.
+2. **Context placement must cover every meaningful exit path.** For planner and plan-reviewer CLIs,
+   verify issue-discovery rate-limit returns, normal returns, exception paths, and
+   `KeyboardInterrupt` handling are all inside the `with work_report_context(...)` block.
+3. **`work_units = 0` must be an explicit sentinel decision.** Rate-limit, pre-run failure, and
+   interrupt paths can reasonably mean "no completed work" once reporting is active, but the plan must
+   state that contract and align it with the loop runner's missing-report = unknown/work convention.
+4. **Do not let `work_units_fn` mask the original failure.** If the callback is evaluated in `finally`,
+   review whether callback exceptions are caught/logged or otherwise prevented from replacing the
+   exception that caused process exit.
+5. **Entry-time environment capture is a contract.** Reading `HEPH_WORK_REPORT` once on context entry
+   makes the target path stable for the process lifetime. If the environment changes later, that change
+   should not silently redirect the report unless the plan explicitly chooses dynamic lookup.
+6. **Patch-target tests need a migration audit.** Replacing module-level `write_work_report` imports can
+   break tests or downstream monkeypatches that patch `planner.write_work_report` or
+   `plan_reviewer.write_work_report`. Grep beyond the two modified modules and update tests to patch
+   the new lookup site only when patching is still the right surface.
+7. **Prefer observable report-file assertions for regression coverage.** Tests that inspect the
+   generated `HEPH_WORK_REPORT` file prove the public loop-runner contract. Patched helper-call
+   assertions are still useful for narrow unit tests, but they can overfit to import placement.
 
 ## Keep the Human Summary Consistent with the Convergence Signal (v1.1.0)
 
@@ -161,6 +215,9 @@ NOT "phase did work". Any human-facing summary must read the same `work_units` /
 | Summary counted "phase ran" not "work done" | `_summarize_loop` did `total_planned += 1` for any non-skipped plan phase | Diverged from the convergence predicate, which reads `work_units` — produced `planned=4` directly above `Early exit ... produced 0 new plans` | Any human-facing loop summary must read the SAME signal (`work_units`/`produced_work`) the early-exit predicate reads; grep for `+= 1` next to a phase check when auditing |
 | Trusting `work_units` for the `implement` phase | Considered counting `implement` by `work_units` too | `implement` writes no work-report, so its `work_units` is always `None`; counting it by `work_units` would always fall to the conservative `else 1` and tell you nothing | `work_units` reliability is per-phase: only `plan` reports it. Trust `work_units` only for instrumented phases; fall back conservatively otherwise |
 | Warning on every empty pass | Considered warning whenever `filter()` returns nothing | A converged repo under AUTO-discovery legitimately empties every pass → re-introduces loop spam | Warn only when an EXPLICIT `--issues` set fully filters out. Capture the explicit-vs-discovered distinction at the CLI boundary (`planner.main`, before discovery overwrites `args.issues`), since by `filter()` time `options.issues` is always populated either way |
+| Context starts after an early return | Plan assumes all meaningful early returns happen after `with work_report_context(...)` starts | Any return before the context preserves the old missing-report behavior, which the loop runner treats as unknown/work rather than zero work | Trace every `return` / `sys.exit` in `main()` and prove rate-limit / interrupt / pre-run paths are inside the context before approving |
+| Callback failure in `finally` ignored | Plan evaluates `work_units_fn()` during context exit without stating what happens if the callback raises | A callback exception can mask the original exception or convert a clean exit into a failure | Wrap callback/report-write failures deliberately, or document why fail-fast is desired; do not leave masking behavior accidental |
+| Patch-call assertions as the only regression surface | Tests patch `write_work_report` and assert the call rather than reading the report file | The public loop-runner contract is the report artifact, not the internal helper binding; import refactors can make patched-call tests brittle | Prefer direct `HEPH_WORK_REPORT` file assertions for CLI/reporting behavior, with patch tests only for narrow helper internals |
 
 ## Results & Parameters
 
@@ -223,6 +280,45 @@ def _unknown_work_result(repo, loop_idx):
   now logs `loop 1: planned=0 ...` plus the all-filtered WARNING per issue.
   CI for PR #1564 was still pending at capture time (NOT verified-ci).
 
+### Work-Report Context Manager Plan-Risk Checklist (v1.2.0 — issue #1390 plan review)
+
+**Verification level: unverified.** This was derived from an implementation plan for a small
+ProjectHephaestus refactor and was not executed. Use it as a reviewer checklist until a downstream PR
+proves the contract.
+
+Most uncertain assumptions to challenge:
+
+- `HEPH_WORK_REPORT` is intentionally read only on context entry, not dynamically at exit time.
+- All meaningful planner and plan-reviewer early returns happen after the proposed context starts.
+- `work_units = 0` is the right sentinel for rate-limit, `KeyboardInterrupt`, and pre-run failure paths
+  once reporting is active.
+- Replacing module-level `write_work_report` imports will not break tests or monkeypatch expectations
+  outside the call sites found by `rg`.
+- Direct report-file assertions are the better regression surface than patched `write_work_report`
+  call assertions.
+
+Unverified dependencies / sources from the plan:
+
+- Relied on `rg` search over `hephaestus/`, `tests/`, and `pyproject.toml`; no implementation was run.
+- Relied on file paths and line numbers from the checkout at planning time; re-anchor by symbol before
+  editing.
+- Relied on loop-runner convention that a missing report means unknown/work.
+- Listed `pytest`, `ruff`, and `mypy` expectations without running them.
+- Did not verify CI behavior or the external GitHub issue context beyond the supplied plan.
+
+Reviewer focus:
+
+```text
+- Does the context manager write on exception and return paths while preserving no-op behavior when
+  HEPH_WORK_REPORT is absent?
+- Is planner issue-discovery rate-limit return inside the reporting context?
+- Is plan_reviewer KeyboardInterrupt handling inside the reporting context?
+- Can work_units_fn() in finally mask the original exception?
+- Is entry-time HEPH_WORK_REPORT capture intentional if the env var mutates mid-run?
+- Are there remaining direct imports or patch-based tests targeting a removed write_work_report symbol?
+- Does mypy accept contextlib.contextmanager + Callable[[], int] + Iterator[None]?
+```
+
 ### Related Skills
 
 - [[automation-loop-post-loop-filter-omission]] — another caller-side
@@ -240,3 +336,4 @@ def _unknown_work_result(repo, loop_idx):
 |---------|---------|---------|
 | ProjectHephaestus | Issue #614 — early-exit loop on zero-work pass | PR #669; 736 automation tests pass locally; all pre-commit hooks pass |
 | ProjectHephaestus | Issue #1563 — summary/convergence divergence (`_summarize_loop` counted "ran" not "work done") | PR #1564; 1851 automation tests pass locally; ruff/mypy clean; CI pending |
+| ProjectHephaestus | Issue #1390 — plan for `work_report_context(work_units_fn)` refactor | unverified; plan-review risk capture only, no implementation or CI run |

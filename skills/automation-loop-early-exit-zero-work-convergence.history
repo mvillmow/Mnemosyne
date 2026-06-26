@@ -1,5 +1,69 @@
 # automation-loop-early-exit-zero-work-convergence — History
 
+## v1.2.0 (2026-06-26)
+
+**Changed by:** ProjectHephaestus issue #1390 implementation-plan review — proposed
+`work_report_context(work_units_fn)` to centralize `HEPH_WORK_REPORT` write-on-exit
+behavior for planner and plan-reviewer CLIs.
+**Verification:** unverified (plan-review artifact only; no implementation, tests, or CI run)
+
+### What changed
+
+- Added a new "When to Use" trigger for reviewing/implementing a context-manager
+  extraction of `HEPH_WORK_REPORT` behavior.
+- Added an explicitly unverified "Proposed Workflow: Work-Report Context Manager
+  Plan Review" checklist.
+- Added direct reviewer checks for exception/return-path coverage, no-op semantics
+  when `HEPH_WORK_REPORT` is absent, callback exception masking from `finally`,
+  entry-time environment capture, direct import/monkeypatch migration risk, and
+  `contextlib.contextmanager` type-checking.
+- Added 3 new Failed Attempts rows for context placement after early returns,
+  callback failure masking, and overfitting tests to patched helper-call assertions.
+- Added issue #1390 to the Results and Verified On sections.
+- Bumped version 1.1.0 -> 1.2.0, updated date, expanded tags, and changed
+  frontmatter `verification` to `unverified` because the new content is a
+  planning-risk checklist rather than an executed workflow.
+
+### Why
+
+The plan's reusable lesson is not the ProjectHephaestus implementation detail itself;
+it is the review posture for a small DRY/context-manager refactor around a machine
+contract. A missing report means "unknown/work" to the loop runner, while an explicit
+`work_units = 0` means convergence/no work. Therefore a report-context refactor must
+be reviewed as an exit-path and sentinel-contract change, not as a mechanical import
+cleanup. The highest-risk plan assumptions were whether the context starts before all
+meaningful returns, whether `work_units_fn()` can mask the original exception, and
+whether tests should assert the report artifact rather than a helper binding.
+
+### Previous version (v1.1.0) snapshot
+
+The complete v1.1.0 body is preserved in the parent commit for this PR. Key metadata
+and contract before amendment:
+
+```markdown
+---
+name: automation-loop-early-exit-zero-work-convergence
+description: "How to wire and test early-exit in hephaestus-automation-loop when a full pass produces zero new work, and how to keep the human-facing per-loop summary consistent with the machine convergence signal. Use when: (1) implementing loop convergence detection in run_loop, (2) adding tests for early-exit stub placeholders, (3) diagnosing whether early-exit scaffold already exists before implementing, (4) auditing a per-loop/iteration summary that contradicts the early-exit message."
+category: tooling
+date: 2026-06-21
+version: "1.1.0"
+user-invocable: false
+verification: verified-local
+history: automation-loop-early-exit-zero-work-convergence.history
+tags: [automation, loop-runner, early-exit, convergence, testing, summary, work-units]
+---
+
+# Automation Loop Early-Exit on Zero-Work Pass
+
+v1.1.0 covered early-exit/convergence wiring and summary/convergence consistency:
+`run_loop` exits when every convergence phase reports zero work, `_summarize_loop`
+must count the same `work_units` signal as the convergence predicate, `implement`
+does not write work reports, and explicit issue sets that fully filter out should
+warn while auto-discovery stays quiet.
+```
+
+---
+
 ## v1.1.0 (2026-06-21)
 
 **Changed by:** ProjectHephaestus PR #1564 / issue #1563 — human-facing per-loop
