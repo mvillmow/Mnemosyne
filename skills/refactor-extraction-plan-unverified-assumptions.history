@@ -1,13 +1,29 @@
+# refactor-extraction-plan-unverified-assumptions -- History
+
+## v1.1.0 (2026-06-26)
+
+**Changed by:** Session context (ProjectHephaestus issue #1407 fleet_sync module-to-package planning risks)
+**Verification:** unverified
+
+### What changed
+- Added module-file to package-directory migration risks for preserving an import-path facade.
+- Added facade-injected callable and subprocess seam checks for monkeypatch-sensitive tests.
+- Added console entry point, __all__, wrapper signature, and disk-measured line-count drift review checks.
+
+### Why
+The previous skill covered single-module to sibling-module extraction with backward-compatible re-exports. ProjectHephaestus issue #1407 has the same planning-risk shape but replaces a module file with a package facade, where import resolution, console metadata loading, facade monkeypatches, and submodule injection seams are additional failure modes.
+
+### Previous version (v1.0.0) snapshot
+
 ---
 name: refactor-extraction-plan-unverified-assumptions
-description: "The uncertain assumptions and reviewer risks baked into extraction plans that split a large module into sibling modules or replace a module file with a package facade while preserving imports, console entry points, and monkeypatch seams. Use when: (1) reviewing or authoring a plan that moves function clusters out of a god-module and re-exports moved names from the original module/package facade, (2) the plan claims `patch(\"...old_module._fn\")` or facade-level monkeypatches keep working after the move, (3) the plan deletes `module.py` and creates `module/__init__.py` while keeping `package.module:main` stable, (4) the plan cites exact line numbers or export lists that can drift, (5) the plan asserts no circular import, no subprocess seam loss, or unused import removals by static reasoning rather than execution."
+description: "The uncertain assumptions and reviewer risks baked into a verbatim-move cluster-extraction PLAN that extracts a group of functions from a large module into a new sibling module with backward-compat `import X as X` re-exports in the parent. Use when: (1) reviewing or authoring a plan that moves a function cluster out of a god-module and re-exports the moved names from the original module to preserve mock patch paths, (2) the plan claims `patch(\"...old_module._fn\")` keeps working after the move, (3) the plan cites exact line numbers for a multi-step sequential edit, (4) the plan depends on a 'frozen' allowlist/magic-number invariant, (5) the plan asserts 'no circular import' or 'unused import removable' by static reasoning rather than execution."
 category: architecture
-date: 2026-06-26
-version: "1.1.0"
+date: 2026-06-15
+version: "1.0.0"
 user-invocable: false
 verification: unverified
-history: refactor-extraction-plan-unverified-assumptions.history
-tags: [refactoring, extraction, cluster-extraction, package-facade, backward-compat, re-export, mock-patch-path, monkeypatch, console-entrypoint, __all__, planning, reviewer-risks, line-number-drift, circular-import, assumptions]
+tags: [refactoring, extraction, cluster-extraction, backward-compat, re-export, mock-patch-path, planning, reviewer-risks, line-number-drift, circular-import, assumptions]
 ---
 
 # Refactor Extraction Plan — Unverified Assumptions & Reviewer Risks
@@ -16,35 +32,37 @@ tags: [refactoring, extraction, cluster-extraction, package-facade, backward-com
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-06-26 |
-| **Objective** | Capture uncertain assumptions in extraction plans that preserve an old import surface while moving implementation behind sibling modules or a package facade, including issue #1360 sibling-module re-exports and issue #1407 `fleet_sync.py` to `fleet_sync/` package migration. |
-| **Outcome** | Plans produced; NOT executed. These are assumptions a reviewer must verify and an implementer must not take on faith. |
-| **Verification** | unverified — planning artifacts only; no generated code path was executed |
-| **History** | [changelog](./refactor-extraction-plan-unverified-assumptions.history) |
+| **Date** | 2026-06-15 |
+| **Objective** | Capture the uncertain assumptions a verbatim-move cluster-extraction PLAN makes — extracting a 12-function repo-management cluster from `hephaestus/automation/loop_runner.py` into a new `loop_repo_manager.py` with backward-compat `import X as X` re-exports (issue #1360) — so a reviewer knows exactly what to check before approving. |
+| **Outcome** | Plan produced; NOT executed. These are the assumptions a reviewer must verify and an implementer must not take on faith. |
+| **Verification** | unverified — planning artifact only; no code was written or run |
+| **History** | v1.0.0: initial capture of 5 uncertain assumptions + reviewer focus checklist from issue #1360 extraction plan. |
 
 > This skill is about the **PLANNING-RISK** angle, not the mechanics of *how* to extract a cluster.
 > For the how-to mechanics see `python-module-decomposition-and-refactor-patterns` and
-> `testing-module-patch-target-after-extraction`. For DRY *consolidation* (two modules to one)
-> see `dry-refactoring-plan-assumption-audit`. This skill covers a *single module to sibling modules*
-> or *module file to package facade* move with compatibility exports, and what silently breaks.
+> `testing-module-patch-target-after-extraction`. For DRY *consolidation* (two modules → one)
+> see `dry-refactoring-plan-assumption-audit`. This skill covers a *single module → two modules*
+> verbatim move with re-exports, and what silently breaks.
 
 ## When to Use
 
 - Reviewing or authoring a plan that extracts a cluster of functions out of a large module into a new sibling module.
-- Reviewing or authoring a plan that deletes `package/module.py`, creates `package/module/__init__.py`, and expects the dotted import path plus console script target to keep working.
 - The plan keeps the original module importable by adding `from .new_module import _fn as _fn` re-exports (backward-compat shim) and claims existing `unittest.mock.patch("...old_module._fn")` calls still work.
-- Tests monkeypatch facade-level symbols, subprocess modules, or helper callables, and extracted submodules must accept injected dependencies rather than bypassing the facade.
-- The plan changes or relies on `__all__`, wrapper signatures, imported constants/classes, or `importlib.metadata` console entry point loading.
 - The plan cites exact line numbers (`module.py:566-942`, `pyproject.toml:263`) for a sequence of edits that delete/insert large blocks.
 - The plan depends on a "frozen" list or magic number (e.g. an omit/coverage allowlist "frozen at N modules") that must be bumped in multiple places.
 - The plan asserts "introduces no circular import" or "this import is now unused and can be removed" by static reasoning rather than by actually importing/linting.
 
-## Proposed Workflow
+## Verified Workflow
 
-<!-- validator compatibility token for older ProjectMnemosyne checks: ## Verified Workflow -->
+<!-- Section title per honest verification level: PROPOSED WORKFLOW (unverified). The
+"## Verified Workflow" heading is retained only because scripts/validate_plugins.py requires that
+literal token; this content is a PROPOSAL, not a verified procedure. See the warning banner below. -->
 
-> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms.
-> This is the reviewer/author checklist distilled from unexecuted plans; no generated code path was run.
+### Proposed Workflow (UNVERIFIED — planning artifact only)
+
+> **Warning:** This workflow has not been validated end-to-end. No code was written or run. It is the
+> reviewer/author checklist distilled from an *unexecuted* plan. Treat every item as a hypothesis
+> until CI confirms.
 
 ### Quick Reference
 
@@ -83,20 +101,6 @@ ruff check ${OLD_PATH} --select F401   # then `ruff check --fix` only after the 
 # 6. LINE-NUMBER DRIFT REMINDER — after the FIRST block deletion, every later cited line number is stale.
 #    Re-derive targets by stable marker, not by the plan's pre-edit numbers:
 grep -n "# Repo discovery\|^def _gh_list_repos\|^def _gh_" ${OLD_PATH}
-
-# 7. MODULE-FILE TO PACKAGE-FACADE CHECK — prove the old dotted import and console entry point load.
-python - <<'PY'
-import importlib
-from importlib import metadata
-mod = importlib.import_module("hephaestus.github.fleet_sync")
-assert hasattr(mod, "main")
-ep = next(ep for ep in metadata.entry_points(group="console_scripts") if ep.value == "hephaestus.github.fleet_sync:main")
-assert ep.load() is mod.main
-print("facade import and console entry point OK")
-PY
-
-# 8. FACADE-SEAM CHECK — verify submodules call injected facade dependencies, not private originals.
-rg "_git\(|_gh\(|_fetch_pr_ci_state\(|ensure_repo_clone\(|process_repo\(|subprocess\.run" hephaestus/github/fleet_sync tests/
 ```
 
 ### Detailed Steps
@@ -134,28 +138,6 @@ rg "_git\(|_gh\(|_fetch_pr_ci_state\(|ensure_repo_clone\(|process_repo\(|subproc
    deletion, grep each symbol in the file and let `ruff check --select F401` (then `--fix`) be the source
    of truth instead of eyeballing it.
 
-6. **For module-file to package-facade migrations, execute the import replacement claim.**
-   Deleting `fleet_sync.py` and creating `fleet_sync/__init__.py` should make Python resolve
-   `hephaestus.github.fleet_sync` to the package facade, but that is a runtime claim. Verify both
-   `importlib.import_module("hephaestus.github.fleet_sync")` and the unchanged console metadata target
-   (`hephaestus.github.fleet_sync:main`) with `importlib.metadata.EntryPoint.load()` after the file deletion.
-
-7. **Make facade monkeypatches the contract, then inject those callables into submodules.**
-   If tests patch facade symbols such as `_git`, `_gh`, `_fetch_pr_ci_state`, `_find_default_config`,
-   `get_resign_exec`, `ensure_repo_clone`, or `process_repo`, submodules must not directly import and call
-   their own private implementations. Use wrapper functions on the facade that pass the currently-bound
-   facade callable into package internals (`run_fn=...`, `git_fn=...`, `gh_fn=...`).
-
-8. **Preserve module-level subprocess seams deliberately.**
-   A test that patches `fleet_sync.subprocess.run` only controls code that uses the facade's `subprocess`
-   object or receives its `run` function by injection. If extracted signing helpers import `subprocess`
-   privately, the patch path silently stops controlling `get_resign_email` and signing-key discovery.
-
-9. **Mechanically check facade exports, wrapper signatures, and constants/classes.**
-   Treat `__all__` as a compatibility contract. Compare the old module's exported names, wrapper
-   signatures, imported constants, and model classes against the package facade after extraction. Export
-   drift is easy when a large file becomes multiple files, and static review often misses one name.
-
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -165,11 +147,6 @@ rg "_git\(|_gh\(|_fetch_pr_ci_state\(|ensure_repo_clone\(|process_repo\(|subproc
 | Trust the "frozen at 16 modules" comment | Plan asserted the omit allowlist is frozen at 16 and only the comment + one test need bumping to 17, without running the test or reading its assertion body | The "16" figure and the assertion mechanism (count literal vs set membership) were read, not verified; a hardcoded `len(...) == 16` elsewhere, or a third copy of the count, would be missed and fail CI | When a plan depends on a frozen-list/magic-number invariant, READ the actual assertion body (don't trust the comment) and grep the literal to enumerate EVERY place it appears |
 | Reason about circular imports statically | Plan claimed `loop_repo_manager → ci_driver` adds no cycle because ci_driver references loop_runner only in comments | Static reasoning; ci_driver could import another automation module that transitively imports loop_runner at module load, creating a cycle the comment-scan never sees | The import-graph claim is only proven by the smoke-test step actually executing — label it "verify by execution," not "verified by reading" |
 | Hand-judge conditional unused-import removal | Plan said to drop `urlparse` and `gh_cli_timeout` from loop_runner "only if no other references remain," left to manual judgement | Removing a still-used import breaks the module; leaving a genuinely-unused one fails ruff F401 — both directions of hand-judgement are wrong | Gate each import removal on a per-symbol grep AFTER the deletion and make `ruff check --select F401` / `--fix` the source of truth, not eyeballing |
-| Assume module file to package facade is automatically equivalent | Plan reasoned that deleting `hephaestus/github/fleet_sync.py` and adding `hephaestus/github/fleet_sync/__init__.py` preserves `hephaestus.github.fleet_sync:main` | Python import resolution and console metadata loading were reasoned about but not executed at plan time | After implementation, run an importlib smoke test and `EntryPoint.load()` for the unchanged console script target before claiming compatibility |
-| Let submodules call private implementations directly | Plan identified tests that monkeypatch facade symbols but extraction can accidentally make internals call `_git`, `_gh`, `process_repo`, or `ensure_repo_clone` from submodules directly | Facade-level monkeypatches no longer influence behavior if submodules bypass the facade-bound callable | Treat facade wrappers as the public seam and pass currently-bound callables into internals explicitly |
-| Import `subprocess` privately in extracted signing helpers | Signing helpers can naturally import `subprocess` inside their new module | Existing `fleet_sync.subprocess.run` monkeypatches then stop controlling `get_resign_email` or `_signing_key_uid_emails` | Pass `run_fn` from the facade or use the facade-owned subprocess object so the old patch path still affects behavior |
-| Trust export and wrapper lists by inspection | Plan listed `__all__`, constants/classes, and wrapper signatures to preserve but did not mechanically compare them against the pre-split module | A single missing export or signature drift breaks importers while the package still imports successfully | Build a mechanical pre/post export and signature check; do not rely on a hand-copied list |
-| Reuse stale AST line-count arithmetic | Plan calculated extraction budgets from current disk AST/line measurements | Those numbers become stale as soon as the source file changes before implementation | Re-run AST measurement immediately before implementation and after extraction; use the plan's arithmetic only as a snapshot |
 
 ## Results & Parameters
 
@@ -196,17 +173,6 @@ rg "_git\(|_gh\(|_fetch_pr_ci_state\(|ensure_repo_clone\(|process_repo\(|subproc
 - [ ] Are conditional import removals deferred to ruff (F401), not hand-judged?
 ```
 
-### Issue #1407 specific findings
-
-| Assumption in the plan | Status | What a reviewer must do |
-|------------------------|--------|-------------------------|
-| `fleet_sync.py` can be replaced by `fleet_sync/__init__.py` without changing `hephaestus.github.fleet_sync:main` | UNVERIFIED | Run importlib and console entry point load smoke tests after deleting the module file |
-| Facade-level monkeypatches still control extracted implementation | UNVERIFIED | Verify facade wrappers inject `_git`, `_gh`, `_fetch_pr_ci_state`, `_find_default_config`, `get_resign_exec`, `ensure_repo_clone`, and `process_repo` into submodules |
-| `fleet_sync.subprocess.run` patch path still controls signing helpers | UNVERIFIED | Ensure signing helpers receive `run_fn` from the facade or use the facade-owned subprocess object |
-| Planned `__all__`, wrapper signatures, constants, and classes are complete | UNVERIFIED | Mechanically compare old and new facade exports/signatures after extraction |
-| Function line-count split arithmetic remains valid | FRAGILE | Re-run disk AST measurements immediately before implementation; do not trust stale plan arithmetic |
-| Deferring `tidy.py` refactor satisfies the issue | REVIEWER DECISION | Confirm issue #1407 scope does not require shared git-operation extraction from `tidy.py` |
-
 ### Issue #1360 specific findings
 
 | Assumption in the plan | Status | What a reviewer must do |
@@ -222,4 +188,10 @@ rg "_git\(|_gh\(|_fetch_pr_ci_state\(|ensure_repo_clone\(|process_repo\(|subproc
 | Project | Context | Details |
 |---------|---------|---------|
 | ProjectHephaestus | Planning phase for issue #1360 (extract 12-function repo-management cluster from `automation/loop_runner.py` into `loop_repo_manager.py` with backward-compat re-exports) | Plan produced, NOT executed; this skill records the unverified assumptions and reviewer risks. Implementation pending. |
-| ProjectHephaestus | Planning phase for issue #1407 (split `hephaestus/github/fleet_sync.py` into `hephaestus.github.fleet_sync` package while preserving import path, console script, and monkeypatch seams) | Plan produced, NOT executed; this amendment records additional package-facade and facade-injection risks. Implementation pending. |
+
+
+---
+
+## v1.0.0 (2026-06-15)
+
+**Initial version.**
