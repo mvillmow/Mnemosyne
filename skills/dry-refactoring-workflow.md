@@ -1,9 +1,9 @@
 ---
 name: dry-refactoring-workflow
-description: "Complete TDD-driven workflow for identifying and eliminating code duplication by extracting reusable helper methods. Use when: (1) extracting duplicated helper methods into a shared module using TDD (write a failing test against the canonical, delete the duplicate, run green); (2) creating a private leaf module with leading-underscore naming to centralize a repeated internal call (e.g. importlib.metadata version resolution, path construction) and prevent re-introduction across modules; (3) centralizing hardcoded path constants into a single module to prevent drift when directory structure changes (incl. phase-routed in_progress/completed splits); (4) deduplicating LLM JSON extraction, parser logic, or any call-site pattern copy-pasted across several files; (5) test structure must mirror source structure when extracting helpers; (6) running a full DRY consolidation pass (discovery via grep, classifying true duplicates vs intentional variants, dict-structure consolidation) and refactoring to a single canonical source; (7) extract-method / SRP decomposition of over-long functions (50-LOC) and methods (100-LOC), including converting a mutating closure into a method via a small mutable box; (8) extracting repeated cached lookups into an @lru_cache helper (and clearing the cache so unittest.mock.patch works); (9) removing stale scripts / deprecated stubs (grep callers first) and replacing hardcoded file lists with dynamic Path.rglob discovery; (10) PLANNING a consolidation of two OVERLAPPING but not-identical constant collections (frozensets / keyword lists / error-pattern tuples) — classify true-duplicate vs intentional-variant first, then extract only the shared CORE into one canonical immutable constant and have each consumer compose CORE | its-own-extras, proving anti-drift with CORE.issubset(consumer) parity tests, instead of a flat merge that would violate a deliberate behavioral contract. (11) behavior-preserving duplicate cleanup across test fakes, tiny strategy/kernel modules, and validation wrappers: keep public module exports stable, centralize only identical mechanics, preserve local wrapper names/error messages, and verify with focused + full suites before opening a PR. Also covers cryptographic commit signing requirements in PR workflows. (12) stale issue body in dedup/consolidation tasks: issue 'Evidence:' sections go stale as prior PRs partially resolve them — grep the CURRENT state first; choose inlining over fixtures for pure bytes→str helpers; resolve remote branch divergence by pushing to a new branch rather than force-pushing or rebasing 84 conflicting commits. (13) PLANNING an extraction whose issue claims 'N nearly-identical, M byte-for-byte identical' methods: the COUNT and 'byte-for-byte identical' assertions go STALE exactly like the 'Evidence:' section — count and DIFF every claimed-duplicate body in full before scoping; prior refactors may have already delegated one to a richer printer or changed another's signature/model, and even the truly-similar bodies often hide call-site-varying string args (count noun, header) that a flat merge would silently change — parameterize those as kwargs-with-defaults to guarantee zero behavior change, and place the helper in an EXISTING established-dedup module rather than a new leaf module or base-class method. (14) PLANNING a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam — grep patch.object(.*\"_method\") BEFORE planning any deletion (a method patched at many call sites must be KEPT as a one-line thin wrapper delegating to the new free function, never deleted, or every patch target breaks); read the actual test bodies to confirm which 'near-identical' differences (log level, an extra debug line, exception-message wording) are behavior-bearing vs incidental before collapsing copies (only safe to collapse logging when no test asserts log level/message); match the target module's established convention (free function taking explicit args, not a mixin/base-class method); hedge unverified import assumptions a planner did not execute (is pathlib.Path already imported? is there a 'from ._review_utils import ...' line to extend? is a cross-layer runtime import safe within the automation→library boundary AND absent from the base 'import hephaestus' surface?); and prove a pure extraction with a single-canonical-source grep that must return exactly one hit PLUS the PRE-EXISTING per-class behavioral suites staying green (the real acceptance gate, not the new structural tests)."
+description: "Complete TDD-driven workflow for identifying and eliminating code duplication by extracting reusable helper methods. Use when: (1) extracting duplicated helper methods into a shared module using TDD (write a failing test against the canonical, delete the duplicate, run green); (2) creating a private leaf module with leading-underscore naming to centralize a repeated internal call (e.g. importlib.metadata version resolution, path construction) and prevent re-introduction across modules; (3) centralizing hardcoded path constants into a single module to prevent drift when directory structure changes (incl. phase-routed in_progress/completed splits); (4) deduplicating LLM JSON extraction, parser logic, or any call-site pattern copy-pasted across several files; (5) test structure must mirror source structure when extracting helpers; (6) running a full DRY consolidation pass (discovery via grep, classifying true duplicates vs intentional variants, dict-structure consolidation) and refactoring to a single canonical source; (7) extract-method / SRP decomposition of over-long functions (50-LOC) and methods (100-LOC), including converting a mutating closure into a method via a small mutable box; (8) extracting repeated cached lookups into an @lru_cache helper (and clearing the cache so unittest.mock.patch works); (9) removing stale scripts / deprecated stubs (grep callers first) and replacing hardcoded file lists with dynamic Path.rglob discovery; (10) PLANNING a consolidation of two OVERLAPPING but not-identical constant collections (frozensets / keyword lists / error-pattern tuples) — classify true-duplicate vs intentional-variant first, then extract only the shared CORE into one canonical immutable constant and have each consumer compose CORE | its-own-extras, proving anti-drift with CORE.issubset(consumer) parity tests, instead of a flat merge that would violate a deliberate behavioral contract. (11) behavior-preserving duplicate cleanup across test fakes, tiny strategy/kernel modules, and validation wrappers: keep public module exports stable, centralize only identical mechanics, preserve local wrapper names/error messages, and verify with focused + full suites before opening a PR. Also covers cryptographic commit signing requirements in PR workflows. (12) stale issue body in dedup/consolidation tasks: issue 'Evidence:' sections go stale as prior PRs partially resolve them — grep the CURRENT state first; choose inlining over fixtures for pure bytes→str helpers; resolve remote branch divergence by pushing to a new branch rather than force-pushing or rebasing 84 conflicting commits. (13) PLANNING an extraction whose issue claims 'N nearly-identical, M byte-for-byte identical' methods: the COUNT and 'byte-for-byte identical' assertions go STALE exactly like the 'Evidence:' section — count and DIFF every claimed-duplicate body in full before scoping; prior refactors may have already delegated one to a richer printer or changed another's signature/model, and even the truly-similar bodies often hide call-site-varying string args (count noun, header) that a flat merge would silently change — parameterize those as kwargs-with-defaults to guarantee zero behavior change, and place the helper in an EXISTING established-dedup module rather than a new leaf module or base-class method. (14) PLANNING a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam — grep patch.object(.*\"_method\") BEFORE planning any deletion (a method patched at many call sites must be KEPT as a one-line thin wrapper delegating to the new free function, never deleted, or every patch target breaks); read the actual test bodies to confirm which 'near-identical' differences (log level, an extra debug line, exception-message wording) are behavior-bearing vs incidental before collapsing copies (only safe to collapse logging when no test asserts log level/message); match the target module's established convention (free function taking explicit args, not a mixin/base-class method); hedge unverified import assumptions a planner did not execute (is pathlib.Path already imported? is there a 'from ._review_utils import ...' line to extend? is a cross-layer runtime import safe within the automation→library boundary AND absent from the base 'import hephaestus' surface?); and prove a pure extraction with a single-canonical-source grep that must return exactly one hit PLUS the PRE-EXISTING per-class behavioral suites staying green (the real acceptance gate, not the new structural tests). (15) PLANNING caller-first removal of a duplicate passthrough wrapper around a canonical helper: grep all first-party production and test references, migrate callers directly to the canonical helper, keep any unrelated internal alias that already targets the canonical implementation, delete the wrapper only after the old import path has zero repo hits, and review the compatibility/public-surface risk even when the wrapper is absent from __all__."
 category: architecture
-date: 2026-06-20
-version: "1.9.0"
+date: 2026-06-26
+version: "1.10.0"
 user-invocable: false
 verification: verified-ci
 history: dry-refactoring-workflow.history
@@ -16,9 +16,9 @@ Complete TDD-driven workflow for identifying and eliminating code duplication by
 
 | Attribute | Details |
 | ----------- | --------- |
-| **Date** | 2026-06-20 |
+| **Date** | 2026-06-26 |
 | **Objective** | TDD-driven extraction of duplicated code into reusable helper modules, with emphasis on private module placement, test structure mirroring, and cryptographic commit signing |
-| **Outcome** | ✅ v1.0.0 (Feb 2026): Eliminated token aggregation duplication. v1.1.0 (Jun 2026): Extended with private module patterns, test mirroring enforcement, signing requirements. v1.3.0 (Jun 2026): Absorbed centralized path constants, LLM JSON extraction dedup, full DRY consolidation discovery/classify pass, and canonical-source refactor patterns (Pydantic type hierarchy, dict-structure consolidation, orphan relocation). v1.4.0 (Jun 2026): Restored SRP/extract-method (mutable-box closure), @lru_cache detection util (mock.patch/cache_clear gotcha), stale-script/stub cleanup, and dynamic Path.rglob discovery patterns from the nuance audit. ⚠️ v1.5.0 (Jun 2026, **planning-only / unverified**): Added Phase 10 — planning a consolidation of OVERLAPPING constant collections via the core/extras split (CORE \| consumer-extras) with subset parity anti-drift tests, classifying intentional-variant-with-overlap separately from "do not consolidate". v1.6.0 (Jun 2026): Added Radiance behavior-preserving duplicate cleanup pattern for route-test fakes, layout-only metric kernels, validation field wrappers, and stale tool deletion; verified locally with Ruff, full pytest, compileall, diff check, and pre-push pytest; PR CI pending. v1.7.0 (Jun 2026): Added Phase 12 — stale issue body in dedup tasks (grep current state, don't trust 'Evidence:' section); inline vs fixture decision for pure bytes→str helpers; remote branch divergence resolution (new branch vs force-push). Verified CI via ProjectHermes PR #652. ⚠️ v1.8.0 (Jun 2026, **planning-only / unverified**): Added Phase 13 — stale 'N identical duplicates' claims in extraction issues: count and DIFF every claimed-duplicate body before scoping (the duplicate COUNT and 'byte-for-byte identical' assertion go stale like 'Evidence:'); parameterize call-site-varying string args (count noun, failed-header) as kwargs-with-defaults to guarantee zero behavior change instead of flattening; prefer an EXISTING established-dedup home over a new leaf module. Captured from planning ProjectHephaestus issue #1381; NOT executed (no code, no tests, no CI). ⚠️ v1.9.0 (Jun 2026, **planning-only / unverified**): Added Phase 14 — planning a method→free-function extraction when the duplicated method is a patched test seam (#1383, `_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`): grep `patch.object` before any deletion and keep each method as a thin wrapper; read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing; match the target module's free-function convention; hedge unverified import/boundary assumptions; verify by single-hit canonical grep + EXISTING behavioral suites green. NOT executed end-to-end. |
+| **Outcome** | ✅ v1.0.0 (Feb 2026): Eliminated token aggregation duplication. v1.1.0 (Jun 2026): Extended with private module patterns, test mirroring enforcement, signing requirements. v1.3.0 (Jun 2026): Absorbed centralized path constants, LLM JSON extraction dedup, full DRY consolidation discovery/classify pass, and canonical-source refactor patterns (Pydantic type hierarchy, dict-structure consolidation, orphan relocation). v1.4.0 (Jun 2026): Restored SRP/extract-method (mutable-box closure), @lru_cache detection util (mock.patch/cache_clear gotcha), stale-script/stub cleanup, and dynamic Path.rglob discovery patterns from the nuance audit. ⚠️ v1.5.0 (Jun 2026, **planning-only / unverified**): Added Phase 10 — planning a consolidation of OVERLAPPING constant collections via the core/extras split (CORE \| consumer-extras) with subset parity anti-drift tests, classifying intentional-variant-with-overlap separately from "do not consolidate". v1.6.0 (Jun 2026): Added Radiance behavior-preserving duplicate cleanup pattern for route-test fakes, layout-only metric kernels, validation field wrappers, and stale tool deletion; verified locally with Ruff, full pytest, compileall, diff check, and pre-push pytest; PR CI pending. v1.7.0 (Jun 2026): Added Phase 12 — stale issue body in dedup tasks (grep current state, don't trust 'Evidence:' section); inline vs fixture decision for pure bytes→str helpers; remote branch divergence resolution (new branch vs force-push). Verified CI via ProjectHermes PR #652. ⚠️ v1.8.0 (Jun 2026, **planning-only / unverified**): Added Phase 13 — stale 'N identical duplicates' claims in extraction issues: count and DIFF every claimed-duplicate body before scoping (the duplicate COUNT and 'byte-for-byte identical' assertion go stale like 'Evidence:'); parameterize call-site-varying string args (count noun, failed-header) as kwargs-with-defaults to guarantee zero behavior change instead of flattening; prefer an EXISTING established-dedup home over a new leaf module. Captured from planning ProjectHephaestus issue #1381; NOT executed (no code, no tests, no CI). ⚠️ v1.9.0 (Jun 2026, **planning-only / unverified**): Added Phase 14 — planning a method→free-function extraction when the duplicated method is a patched test seam (#1383, `_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`): grep `patch.object` before any deletion and keep each method as a thin wrapper; read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing; match the target module's free-function convention; hedge unverified import/boundary assumptions; verify by single-hit canonical grep + EXISTING behavioral suites green. NOT executed end-to-end. ⚠️ v1.10.0 (Jun 2026, **planning-only / unverified**): Added Phase 15 — caller-first removal of a duplicate passthrough wrapper around a canonical helper (#1401, `github_api.write_secure` → `io.utils.write_secure`): migrate first-party callers before deletion, preserve canonical 0o600 atomic-write semantics, check public compatibility despite no `__all__`, and prefer behavioral coverage over brittle source-inspection assertions. NOT executed end-to-end. |
 | **Primary Issues** | #642 (original), #739 (private module extraction), #917 (pr-policy signing), #503 (LLM JSON dedup) |
 | **Primary PRs** | #714 (original), #900+ (refactoring), #137/#1738 (path constants), #505 (JSON dedup), #201 (DRY consolidation) |
 | **History** | [changelog](./dry-refactoring-workflow.history) |
@@ -68,6 +68,10 @@ Use this workflow when you encounter:
 - "Two near-identical methods differ only in log level / an extra debug line — safe to collapse into one helper?"
 - "Where should a shared cross-reviewer helper live — new leaf module, base class, or the existing `_review_utils.py`?"
 - "I'm planning a refactor but haven't run anything — which import/boundary assumptions must the reviewer double-check?"
+- "Remove a duplicate passthrough wrapper around a canonical helper"
+- "Migrate callers from `old_module.write_secure` to `io.utils.write_secure` without changing atomic 0o600 behavior"
+- "A helper is not in `__all__`; can I delete it without a compatibility shim?"
+- "Should a DRY refactor use `inspect.getsource` assertions or behavioral tests?"
 
 ## Verified Workflow
 
@@ -988,6 +992,85 @@ Prove the two acceptance criteria explicitly:
   acceptance gate for a behavior-preserving refactor is the EXISTING behavioral tests staying
   green; new structural tests for the free function are necessary but insufficient.
 
+### Phase 15: Caller-first removal of a duplicate passthrough wrapper around a canonical helper (NEW in v1.10.0, PLANNING-ONLY)
+
+> **Warning:** This phase is a **proposed workflow** captured from PLANNING ProjectHephaestus
+> issue #1401. It was **NOT validated end-to-end** — no code was written, no tests were run,
+> and no CI confirmed it. Treat every step below as a hypothesis until CI confirms it on a
+> real PR. The rest of this skill is `verified-ci`; this phase alone is unverified.
+
+The #1401 plan removes a duplicate passthrough wrapper
+`hephaestus.automation.github_api.write_secure` and routes automation state persistence callers
+directly to the canonical `hephaestus.io.utils.write_secure`, while preserving the canonical
+atomic write and `0o600` permission behavior. The reusable lesson is the **caller-first** shape:
+migrate every first-party caller to the canonical helper before deleting the wrapper, then prove
+the old import path has no repository references.
+
+#### 15a. Start with current-state grep, not the planning evidence
+
+Line numbers and "production caller" lists drift. Before editing, grep the current checkout:
+
+```bash
+rg -n "write_secure|io_write_secure" hephaestus tests scripts
+rg -n "from hephaestus\\.automation\\.github_api import .*write_secure|github_api\\.write_secure" .
+rg -n "^__all__|write_secure" hephaestus/automation/github_api.py hephaestus/io/utils.py
+```
+
+For #1401 the planning evidence named `hephaestus/automation/_reviewer_base.py` and
+`hephaestus/automation/implementer_state.py` as production callers, the canonical implementation
+in `hephaestus/io/utils.py`, a wrapper near `github_api.py:995`, `__all__` near line 60, an
+internal `io_write_secure` alias still used by `gh_pr_review_post`, and canonical coverage in
+`tests/unit/io/test_utils.py`. Those facts were **not re-verified** during learning capture.
+Treat them as stale hints, not ground truth.
+
+#### 15b. Migrate callers before deleting the wrapper
+
+The safe DRY order is:
+
+1. Change first-party callers to import from `hephaestus.io.utils`.
+2. Run focused tests for the migrated caller behavior.
+3. Grep for the old wrapper import/path and confirm zero first-party hits.
+4. Delete `github_api.write_secure` only after step 3 is true.
+5. Run focused tests plus grep acceptance before opening the PR.
+
+This avoids the common failure mode where the wrapper is deleted first and the implementer then
+discovers hidden production/test references while the tree is already broken.
+
+#### 15c. Keep unrelated canonical aliases if they already point at the right source
+
+Do not mechanically delete every similarly named symbol. In #1401, the plan noted an internal
+`io_write_secure` alias used by `gh_pr_review_post` around `github_api.py:1688`. If that alias
+already imports the canonical `hephaestus.io.utils.write_secure`, it can remain as an internal
+readability seam. The target is the duplicate public-ish passthrough wrapper, not every local
+alias.
+
+#### 15d. Treat non-`__all__` as lower-risk, not no-risk
+
+A function absent from `__all__` is less likely to be intentional public API, but downstream users
+can still import `hephaestus.automation.github_api.write_secure` directly. State the compatibility
+risk in the plan/PR:
+
+- First-party grep can prove repository callers migrated.
+- It cannot prove no external consumer imports the old path.
+- If compatibility matters, keep a deprecation shim; if the wrapper is intentionally removed, call
+  that out explicitly.
+
+#### 15e. Prefer behavioral tests over brittle source-inspection assertions
+
+`inspect.getsource` import-source assertions can be brittle: formatting, decorators, wrappers, or
+import aliases can break them without a behavior change. Preserve the contract with behavioral
+coverage where practical:
+
+- canonical `write_secure` creates parent directories when expected;
+- write is atomic enough for the project's contract;
+- final file mode is `0o600`;
+- migrated state-persistence callers still write the same state file shape;
+- `gh_pr_review_post` continues using the canonical helper through `io_write_secure` if that alias
+  stays.
+
+Use source/grep assertions only for the narrow DRY acceptance gate that the duplicate wrapper is
+gone and first-party callers no longer import it.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -1027,8 +1110,45 @@ Prove the two acceptance criteria explicitly:
 | (PLANNING #1383) Invent a new sharing mechanism for the shared helper | Considered a mixin / base class for `load_impl_session_id` | The target module `_review_utils.py` already houses cross-reviewer helpers as free functions with explicit args (`find_pr_for_issue`, `instance_log`, `parse_json_block`); a new mechanism is higher-risk | Grep the target module's existing helpers and match its established convention (free function, explicit args) rather than introducing a mixin/base-class method |
 | (PLANNING #1383) Assert un-run imports/boundary facts as true in the plan | Wrote "Path is imported", "the `from ._review_utils import ...` line exists", "no boundary violation" without executing | A planning-only plan ran nothing; stating unverified facts as certain misleads the implementer/reviewer | Hedge: "add `pathlib.Path` if not present"; "verify-and-extend the existing import line, else add"; confirm the automation→library import (`hephaestus.agents.runtime`) is the allowed direction with no cycle and that the new helper stays out of the base `import hephaestus` surface (`test_import_surface.py` / `test_automation_boundary.py`) |
 | (PLANNING #1383) Accept new structural helper tests alone as proof of a behavior-preserving refactor | Planned to add tests for `load_impl_session_id` and call the refactor done | New structural tests prove the helper exists, not that behavior is unchanged | The real acceptance gate is the PRE-EXISTING per-class suites (`test_ci_driver.py`, `test_address_review.py`) staying green, plus a single-canonical-source grep that returns exactly one hit (`grep -rn 'state_dir / f"issue-{issue_number}.json"' hephaestus/automation/`) |
+| (PLANNING #1401) Delete the passthrough wrapper before migrating callers | Planned wrapper removal without making caller migration the first concrete step | Hidden production or test imports of `github_api.write_secure` would break immediately, and the implementer would be fixing the tree after deletion instead of from a green baseline | Caller-first DRY: migrate first-party callers to `hephaestus.io.utils.write_secure`, run focused tests, grep old imports to zero, then delete the wrapper |
+| (PLANNING #1401) Treat "not in `__all__`" as proof no compatibility surface exists | Considered absence from `github_api.__all__` sufficient to remove `write_secure` without further discussion | Downstream code can import module attributes directly even when they are not exported by `__all__`; first-party grep cannot prove external usage | State the compatibility decision explicitly. No `__all__` lowers risk but does not eliminate it; keep a shim if external compatibility is required |
+| (PLANNING #1401) Use brittle source-inspection assertions as the main proof | Considered asserting import source via `inspect.getsource` or similar structural checks | Source inspection can fail on harmless formatting/import-shape changes and does not prove atomic-write or `0o600` behavior | Prefer behavioral tests for `write_secure` semantics and state-persistence callers; reserve grep/source assertions for the narrow "old wrapper/import path is gone" acceptance gate |
+| (PLANNING #1401) Delete every local write-secure-looking alias | Treated `io_write_secure` as part of the duplicate-wrapper cleanup | The alias may already target the canonical helper and serve a local readability/test seam for `gh_pr_review_post`; deleting it couples the refactor to unrelated call structure | Scope the deletion to the duplicate passthrough wrapper. Preserve internal aliases that already point at the canonical helper unless they are part of the duplicate public path |
+| (PLANNING #1401) Trust stale line numbers and unverified issue evidence | Cited specific lines for callers, wrapper, `__all__`, alias, and test coverage without re-verifying during learning capture | Planning line numbers drift as the repo changes; issue #1401 details and downstream consumers were not checked live | Re-grep current `main` before implementation and treat the captured evidence as hints only. Reviewer focus should include caller/test migration, canonical semantics coverage, and grep acceptance |
 
 ## Results & Parameters
+
+### Phase 15 Caller-First Wrapper Removal Checklist
+
+Copy this into a plan or PR description when removing a duplicate passthrough wrapper:
+
+```markdown
+## Caller-first DRY wrapper removal
+
+- [ ] Grepped current checkout for old wrapper imports and direct module attribute usage.
+- [ ] Migrated first-party production callers to the canonical helper import.
+- [ ] Migrated tests that intentionally referenced the wrapper, or deleted wrapper-only tests
+      after confirming canonical coverage exists.
+- [ ] Preserved unrelated aliases that already import the canonical helper, or documented why
+      they were removed.
+- [ ] Confirmed `rg "github_api\\.write_secure|from .*github_api import .*write_secure" .`
+      returns zero first-party hits after deletion.
+- [ ] Confirmed canonical helper tests cover atomic write and final `0o600` permissions.
+- [ ] Ran focused caller tests and canonical helper tests before opening the PR.
+- [ ] PR/reviewer notes state the compatibility decision for direct downstream imports of the
+      removed non-`__all__` attribute.
+```
+
+### ProjectHephaestus #1401 Planning Evidence (unverified at capture)
+
+| Item | Planning Evidence | Required Re-check |
+| ---- | ----------------- | ----------------- |
+| Production callers | `hephaestus/automation/_reviewer_base.py`, `hephaestus/automation/implementer_state.py` | `rg -n "write_secure" hephaestus tests scripts` on current `main` |
+| Canonical implementation | `hephaestus/io/utils.py` | Read implementation and run canonical io tests |
+| Duplicate wrapper | `hephaestus/automation/github_api.py` around line 995 | Re-derive by symbol, not line number |
+| Export surface | `__all__` near line 60; wrapper reportedly not exported | Confirm `__all__` and decide compatibility/shim policy |
+| Internal canonical alias | `io_write_secure` used by `gh_pr_review_post` around line 1688 | Preserve if it already targets canonical helper and tests still pass |
+| Existing coverage | `tests/unit/io/test_utils.py` | Prefer behavioral coverage of atomic write and `0o600`; avoid brittle source-inspection-only proof |
 
 ### Radiance v1.6.0 Local Verification
 
@@ -1115,19 +1235,22 @@ def _aggregate_token_stats(self, tier_results: dict[TierID, TierResult]) -> Toke
 | ProjectHermes | #329 / PR #652 | Phase 12 — stale issue body (3 of 4 files already migrated), inline over fixture for pure HMAC helper, new-branch resolution for diverged remote | verified-ci — all pytest passed, signed commit, PR opened |
 | ProjectHephaestus | #1381 | Phase 13 — stale "6 methods / 5 byte-for-byte identical" claim (only 4 real duplicates), parameterize call-site-varying `count_noun`/`failed_header` instead of flat-merge, place helper in existing `_review_utils.py` | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 | ProjectHephaestus | #1383 | Phase 14 — planning a method→free-function extraction (`_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`) where the method is a patched test seam | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
+| ProjectHephaestus | #1401 | Phase 15 — planning caller-first removal of `hephaestus.automation.github_api.write_secure` passthrough in favor of canonical `hephaestus.io.utils.write_secure` while preserving atomic `0o600` behavior | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 
 ## Related Skills
 
 - `token-stats-aggregation` (evaluation) - Token aggregation pattern
 - `codebase-consolidation` (architecture) - Finding duplicates
 - `testing-python-constants-module` (testing) - frozenset/immutability/membership tests referenced by Phase 10
+- `dry-refactoring-plan-assumption-audit` (architecture) - Assumption checklist for module consolidation and wrapper/shim plans
 
 ## Tags
 
-`refactoring`, `dry-principle`, `helper-methods`, `radiance`, `test-fakes`, `validation-wrappers`, `layout-kernels`, `tdd`, `code-quality`, `python`, `pytest`, `private-modules`, `test-structure`, `git-signing`, `importlib-metadata`, `srp`, `extract-method`, `lru-cache`, `mock-patch`, `rglob`, `dead-code-removal`, `constants`, `frozenset`, `drift`, `intentional-variant`, `core-extras-split`, `planning`, `stale-issue-body`, `inline-vs-fixture`, `remote-branch-divergence`, `hmac`, `test-helper-dedup`, `stale-duplicate-count`, `diff-before-merge`, `parameterize-defaults`, `print-summary`, `existing-dedup-home`, `patched-test-seam`, `thin-wrapper`, `free-function-extraction`, `automation-library-boundary`
+`refactoring`, `dry-principle`, `helper-methods`, `radiance`, `test-fakes`, `validation-wrappers`, `layout-kernels`, `tdd`, `code-quality`, `python`, `pytest`, `private-modules`, `test-structure`, `git-signing`, `importlib-metadata`, `srp`, `extract-method`, `lru-cache`, `mock-patch`, `rglob`, `dead-code-removal`, `constants`, `frozenset`, `drift`, `intentional-variant`, `core-extras-split`, `planning`, `stale-issue-body`, `inline-vs-fixture`, `remote-branch-divergence`, `hmac`, `test-helper-dedup`, `stale-duplicate-count`, `diff-before-merge`, `parameterize-defaults`, `print-summary`, `existing-dedup-home`, `patched-test-seam`, `thin-wrapper`, `free-function-extraction`, `automation-library-boundary`, `passthrough-wrapper`, `caller-first`, `write-secure`, `atomic-write`, `compatibility-surface`, `source-inspection`
 
 ## Version History
 
+- **v1.10.0** (2026-06-26, **planning-only for the new phase / unverified**): Added Phase 15 — caller-first removal of a duplicate passthrough wrapper around a canonical helper, captured from ProjectHephaestus #1401 (`hephaestus.automation.github_api.write_secure` → `hephaestus.io.utils.write_secure`). Lessons: grep current references before trusting planning evidence; migrate first-party callers before deleting the wrapper; preserve unrelated aliases that already target the canonical helper; treat "not in `__all__`" as lower-risk but not proof of no downstream imports; prefer behavioral tests for atomic `0o600` write semantics over brittle `inspect.getsource` assertions. Added 5 Failed Attempts rows, a checklist, a ProjectHephaestus #1401 planning evidence table, a Verified On row, trigger phrases, tags, and a related-skill pointer. NOT executed end-to-end (no code, no tests, no CI). The rest of the skill stays `verified-ci`; Phase 15 carries its own unverified warning. Prior v1.9.0 snapshot archived to history.
 - **v1.9.0** (2026-06-20, **planning-only for the new phase / unverified**): Added Phase 14 — planning a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam, captured from ProjectHephaestus #1383 (extract `_load_impl_session_id` → `load_impl_session_id(state_dir, issue_number, agent)` in `hephaestus/automation/_review_utils.py`). Five sub-sections: (14a) grep `patch.object` before deletion — keep each method as a thin wrapper to preserve the seam; (14b) read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing "near-identical" copies; (14c) match the target module's free-function convention rather than a mixin/base class; (14d) hedge unverified import/boundary assumptions (Path import, existing import line, automation→library direction, base-import-surface cleanliness); (14e) prove a pure extraction via a single-hit canonical grep + EXISTING per-class behavioral suites staying green. Added 5 Failed Attempts rows, a Verified On entry, new trigger phrases, and tags. NOT executed end-to-end (no code, no tests, no CI). The rest of the skill stays `verified-ci`; Phase 14 carries its own unverified warning. Sibling to the #1381 Phase 13 (stale-count) added the same day. Prior v1.8.0 snapshot archived to history.
 - **v1.8.0** (2026-06-20, **planning-only / unverified**): Added Phase 13 — stale "N identical duplicates" claims in extraction issues. Captured from PLANNING ProjectHephaestus issue #1381 ("Extract shared `print_worker_summary` helper"); NOT executed end-to-end (no code, no tests, no CI). Lessons: (1) an issue's duplicate COUNT and "byte-for-byte identical" assertion go stale exactly like its "Evidence:" section (extends Phase 12a) — an issue claiming "6 methods, 5 byte-for-byte identical" had only 4 true duplicates (one already delegated to a richer `ImplementationSummaryPrinter`, one with a different signature/model `PlanResult` vs `WorkerResult`); count and DIFF every claimed-duplicate body before scoping. (2) Even the 4 "identical" bodies hid two call-site-varying literals (`"Total PRs:"` vs `"Total issues:"`; leading-newline `"\nFailed issues:"` header vs none) — parameterize as kwargs-with-defaults (`count_noun=`, `failed_header=`) to guarantee zero behavior change, an application of Phase 8c classify-before-merge to a shared function's string args. (3) Placement: prefer an EXISTING established-dedup module (`_review_utils.py`, already houses #599 reviewer-trio dedup + a module `logger`) over a new leaf module or base-class method. Added 3 Failed Attempts rows and a Verified On row. Recorded most-uncertain planning assumptions as explicit risks. Prior v1.7.0 snapshot archived to history.
 - **v1.7.0** (2026-06-19): Added Phase 12 — three concrete lessons from ProjectHermes #329 (HMAC `_sign()` dedup): (1) grep the CURRENT state before trusting issue body "Evidence:" sections (prior PRs may have partially resolved it); (2) inline a pure `bytes→str` helper over adding a pytest fixture or conftest entry when the function closes over a module-local constant; (3) when a remote branch has diverged with a competing solution, push as a new branch rather than force-pushing or rebasing 84 conflicting commits. Added 3 Failed Attempts rows. Updated Verified On table. Verification: verified-ci via ProjectHermes PR #652. Prior v1.6.0 snapshot archived to history.
