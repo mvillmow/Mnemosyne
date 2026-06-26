@@ -1,11 +1,11 @@
 ---
 name: dry-refactoring-workflow
-description: "Complete TDD-driven workflow for identifying and eliminating code duplication by extracting reusable helper methods. Use when: (1) extracting duplicated helper methods into a shared module using TDD (write a failing test against the canonical, delete the duplicate, run green); (2) creating a private leaf module with leading-underscore naming to centralize a repeated internal call (e.g. importlib.metadata version resolution, path construction) and prevent re-introduction across modules; (3) centralizing hardcoded path constants into a single module to prevent drift when directory structure changes (incl. phase-routed in_progress/completed splits); (4) deduplicating LLM JSON extraction, parser logic, or any call-site pattern copy-pasted across several files; (5) test structure must mirror source structure when extracting helpers; (6) running a full DRY consolidation pass (discovery via grep, classifying true duplicates vs intentional variants, dict-structure consolidation) and refactoring to a single canonical source; (7) extract-method / SRP decomposition of over-long functions (50-LOC) and methods (100-LOC), including converting a mutating closure into a method via a small mutable box; (8) extracting repeated cached lookups into an @lru_cache helper (and clearing the cache so unittest.mock.patch works); (9) removing stale scripts / deprecated stubs (grep callers first) and replacing hardcoded file lists with dynamic Path.rglob discovery; (10) PLANNING a consolidation of two OVERLAPPING but not-identical constant collections (frozensets / keyword lists / error-pattern tuples) — classify true-duplicate vs intentional-variant first, then extract only the shared CORE into one canonical immutable constant and have each consumer compose CORE | its-own-extras, proving anti-drift with CORE.issubset(consumer) parity tests, instead of a flat merge that would violate a deliberate behavioral contract. (11) behavior-preserving duplicate cleanup across test fakes, tiny strategy/kernel modules, and validation wrappers: keep public module exports stable, centralize only identical mechanics, preserve local wrapper names/error messages, and verify with focused + full suites before opening a PR. Also covers cryptographic commit signing requirements in PR workflows. (12) stale issue body in dedup/consolidation tasks: issue 'Evidence:' sections go stale as prior PRs partially resolve them — grep the CURRENT state first; choose inlining over fixtures for pure bytes→str helpers; resolve remote branch divergence by pushing to a new branch rather than force-pushing or rebasing 84 conflicting commits. (13) PLANNING an extraction whose issue claims 'N nearly-identical, M byte-for-byte identical' methods: the COUNT and 'byte-for-byte identical' assertions go STALE exactly like the 'Evidence:' section — count and DIFF every claimed-duplicate body in full before scoping; prior refactors may have already delegated one to a richer printer or changed another's signature/model, and even the truly-similar bodies often hide call-site-varying string args (count noun, header) that a flat merge would silently change — parameterize those as kwargs-with-defaults to guarantee zero behavior change, and place the helper in an EXISTING established-dedup module rather than a new leaf module or base-class method. (14) PLANNING a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam — grep patch.object(.*\"_method\") BEFORE planning any deletion (a method patched at many call sites must be KEPT as a one-line thin wrapper delegating to the new free function, never deleted, or every patch target breaks); read the actual test bodies to confirm which 'near-identical' differences (log level, an extra debug line, exception-message wording) are behavior-bearing vs incidental before collapsing copies (only safe to collapse logging when no test asserts log level/message); match the target module's established convention (free function taking explicit args, not a mixin/base-class method); hedge unverified import assumptions a planner did not execute (is pathlib.Path already imported? is there a 'from ._review_utils import ...' line to extend? is a cross-layer runtime import safe within the automation→library boundary AND absent from the base 'import hephaestus' surface?); and prove a pure extraction with a single-canonical-source grep that must return exactly one hit PLUS the PRE-EXISTING per-class behavioral suites staying green (the real acceptance gate, not the new structural tests)."
+description: "Complete TDD-driven workflow for identifying and eliminating code duplication by extracting reusable helper methods. Use when: (1) extracting duplicated helper methods into a shared module using TDD (write a failing test against the canonical, delete the duplicate, run green); (2) creating a private leaf module with leading-underscore naming to centralize a repeated internal call (e.g. importlib.metadata version resolution, path construction) and prevent re-introduction across modules; (3) centralizing hardcoded path constants into a single module to prevent drift when directory structure changes (incl. phase-routed in_progress/completed splits); (4) deduplicating LLM JSON extraction, parser logic, or any call-site pattern copy-pasted across several files; (5) test structure must mirror source structure when extracting helpers; (6) running a full DRY consolidation pass (discovery via grep, classifying true duplicates vs intentional variants, dict-structure consolidation) and refactoring to a single canonical source; (7) extract-method / SRP decomposition of over-long functions (50-LOC) and methods (100-LOC), including converting a mutating closure into a method via a small mutable box; (8) extracting repeated cached lookups into an @lru_cache helper (and clearing the cache so unittest.mock.patch works); (9) removing stale scripts / deprecated stubs (grep callers first) and replacing hardcoded file lists with dynamic Path.rglob discovery; (10) PLANNING a consolidation of two OVERLAPPING but not-identical constant collections (frozensets / keyword lists / error-pattern tuples) — classify true-duplicate vs intentional-variant first, then extract only the shared CORE into one canonical immutable constant and have each consumer compose CORE | its-own-extras, proving anti-drift with CORE.issubset(consumer) parity tests, instead of a flat merge that would violate a deliberate behavioral contract. (11) behavior-preserving duplicate cleanup across test fakes, tiny strategy/kernel modules, and validation wrappers: keep public module exports stable, centralize only identical mechanics, preserve local wrapper names/error messages, and verify with focused + full suites before opening a PR. Also covers cryptographic commit signing requirements in PR workflows. (12) stale issue body in dedup/consolidation tasks: issue 'Evidence:' sections go stale as prior PRs partially resolve them — grep the CURRENT state first; choose inlining over fixtures for pure bytes→str helpers; resolve remote branch divergence by pushing to a new branch rather than force-pushing or rebasing 84 conflicting commits. (13) PLANNING an extraction whose issue claims 'N nearly-identical, M byte-for-byte identical' methods: the COUNT and 'byte-for-byte identical' assertions go STALE exactly like the 'Evidence:' section — count and DIFF every claimed-duplicate body in full before scoping; prior refactors may have already delegated one to a richer printer or changed another's signature/model, and even the truly-similar bodies often hide call-site-varying string args (count noun, header) that a flat merge would silently change — parameterize those as kwargs-with-defaults to guarantee zero behavior change, and place the helper in an EXISTING established-dedup module rather than a new leaf module or base-class method. (14) PLANNING a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam — grep patch.object(.*\"_method\") BEFORE planning any deletion (a method patched at many call sites must be KEPT as a one-line thin wrapper delegating to the new free function, never deleted, or every patch target breaks); read the actual test bodies to confirm which 'near-identical' differences (log level, an extra debug line, exception-message wording) are behavior-bearing vs incidental before collapsing copies (only safe to collapse logging when no test asserts log level/message); match the target module's established convention (free function taking explicit args, not a mixin/base-class method); hedge unverified import assumptions a planner did not execute (is pathlib.Path already imported? is there a 'from ._review_utils import ...' line to extend? is a cross-layer runtime import safe within the automation→library boundary AND absent from the base 'import hephaestus' surface?); and prove a pure extraction with a single-canonical-source grep that must return exactly one hit PLUS the PRE-EXISTING per-class behavioral suites staying green (the real acceptance gate, not the new structural tests). (15) PLANNING a JSON-block parser consolidation across PR review, address review, and CI drive-green: centralize only the common fenced/raw JSON mechanics in _review_utils.parse_json_block while preserving each caller's failure shape, trace-file side effect, first-block selection, raw-JSON fallback, and public adapter/import compatibility."
 category: architecture
-date: 2026-06-20
-version: "1.9.0"
+date: 2026-06-26
+version: "1.10.0"
 user-invocable: false
-verification: verified-ci
+verification: unverified
 history: dry-refactoring-workflow.history
 ---
 # DRY Refactoring Workflow
@@ -18,7 +18,7 @@ Complete TDD-driven workflow for identifying and eliminating code duplication by
 | ----------- | --------- |
 | **Date** | 2026-06-20 |
 | **Objective** | TDD-driven extraction of duplicated code into reusable helper modules, with emphasis on private module placement, test structure mirroring, and cryptographic commit signing |
-| **Outcome** | ✅ v1.0.0 (Feb 2026): Eliminated token aggregation duplication. v1.1.0 (Jun 2026): Extended with private module patterns, test mirroring enforcement, signing requirements. v1.3.0 (Jun 2026): Absorbed centralized path constants, LLM JSON extraction dedup, full DRY consolidation discovery/classify pass, and canonical-source refactor patterns (Pydantic type hierarchy, dict-structure consolidation, orphan relocation). v1.4.0 (Jun 2026): Restored SRP/extract-method (mutable-box closure), @lru_cache detection util (mock.patch/cache_clear gotcha), stale-script/stub cleanup, and dynamic Path.rglob discovery patterns from the nuance audit. ⚠️ v1.5.0 (Jun 2026, **planning-only / unverified**): Added Phase 10 — planning a consolidation of OVERLAPPING constant collections via the core/extras split (CORE \| consumer-extras) with subset parity anti-drift tests, classifying intentional-variant-with-overlap separately from "do not consolidate". v1.6.0 (Jun 2026): Added Radiance behavior-preserving duplicate cleanup pattern for route-test fakes, layout-only metric kernels, validation field wrappers, and stale tool deletion; verified locally with Ruff, full pytest, compileall, diff check, and pre-push pytest; PR CI pending. v1.7.0 (Jun 2026): Added Phase 12 — stale issue body in dedup tasks (grep current state, don't trust 'Evidence:' section); inline vs fixture decision for pure bytes→str helpers; remote branch divergence resolution (new branch vs force-push). Verified CI via ProjectHermes PR #652. ⚠️ v1.8.0 (Jun 2026, **planning-only / unverified**): Added Phase 13 — stale 'N identical duplicates' claims in extraction issues: count and DIFF every claimed-duplicate body before scoping (the duplicate COUNT and 'byte-for-byte identical' assertion go stale like 'Evidence:'); parameterize call-site-varying string args (count noun, failed-header) as kwargs-with-defaults to guarantee zero behavior change instead of flattening; prefer an EXISTING established-dedup home over a new leaf module. Captured from planning ProjectHephaestus issue #1381; NOT executed (no code, no tests, no CI). ⚠️ v1.9.0 (Jun 2026, **planning-only / unverified**): Added Phase 14 — planning a method→free-function extraction when the duplicated method is a patched test seam (#1383, `_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`): grep `patch.object` before any deletion and keep each method as a thin wrapper; read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing; match the target module's free-function convention; hedge unverified import/boundary assumptions; verify by single-hit canonical grep + EXISTING behavioral suites green. NOT executed end-to-end. |
+| **Outcome** | ✅ v1.0.0 (Feb 2026): Eliminated token aggregation duplication. v1.1.0 (Jun 2026): Extended with private module patterns, test mirroring enforcement, signing requirements. v1.3.0 (Jun 2026): Absorbed centralized path constants, LLM JSON extraction dedup, full DRY consolidation discovery/classify pass, and canonical-source refactor patterns (Pydantic type hierarchy, dict-structure consolidation, orphan relocation). v1.4.0 (Jun 2026): Restored SRP/extract-method (mutable-box closure), @lru_cache detection util (mock.patch/cache_clear gotcha), stale-script/stub cleanup, and dynamic Path.rglob discovery patterns from the nuance audit. ⚠️ v1.5.0 (Jun 2026, **planning-only / unverified**): Added Phase 10 — planning a consolidation of OVERLAPPING constant collections via the core/extras split (CORE \| consumer-extras) with subset parity anti-drift tests, classifying intentional-variant-with-overlap separately from "do not consolidate". v1.6.0 (Jun 2026): Added Radiance behavior-preserving duplicate cleanup pattern for route-test fakes, layout-only metric kernels, validation field wrappers, and stale tool deletion; verified locally with Ruff, full pytest, compileall, diff check, and pre-push pytest; PR CI pending. v1.7.0 (Jun 2026): Added Phase 12 — stale issue body in dedup tasks (grep current state, don't trust 'Evidence:' section); inline vs fixture decision for pure bytes→str helpers; remote branch divergence resolution (new branch vs force-push). Verified CI via ProjectHermes PR #652. ⚠️ v1.8.0 (Jun 2026, **planning-only / unverified**): Added Phase 13 — stale 'N identical duplicates' claims in extraction issues: count and DIFF every claimed-duplicate body before scoping (the duplicate COUNT and 'byte-for-byte identical' assertion go stale like 'Evidence:'); parameterize call-site-varying string args (count noun, failed-header) as kwargs-with-defaults to guarantee zero behavior change instead of flattening; prefer an EXISTING established-dedup home over a new leaf module. Captured from planning ProjectHephaestus issue #1381; NOT executed (no code, no tests, no CI). ⚠️ v1.9.0 (Jun 2026, **planning-only / unverified**): Added Phase 14 — planning a method→free-function extraction when the duplicated method is a patched test seam (#1383, `_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`): grep `patch.object` before any deletion and keep each method as a thin wrapper; read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing; match the target module's free-function convention; hedge unverified import/boundary assumptions; verify by single-hit canonical grep + EXISTING behavioral suites green. NOT executed end-to-end. ⚠️ v1.10.0 (Jun 2026, **planning-only / unverified**): Added Phase 15 — planning a JSON-block parser consolidation across PR review, address review, and CI drive-green (#1385): centralize common parser mechanics in `_review_utils.py::parse_json_block` while preserving caller-specific failure shapes, address trace files, first-block/raw fallback behavior, and adapter/import compatibility. NOT executed end-to-end. |
 | **Primary Issues** | #642 (original), #739 (private module extraction), #917 (pr-policy signing), #503 (LLM JSON dedup) |
 | **Primary PRs** | #714 (original), #900+ (refactoring), #137/#1738 (path constants), #505 (JSON dedup), #201 (DRY consolidation) |
 | **History** | [changelog](./dry-refactoring-workflow.history) |
@@ -68,6 +68,94 @@ Use this workflow when you encounter:
 - "Two near-identical methods differ only in log level / an extra debug line — safe to collapse into one helper?"
 - "Where should a shared cross-reviewer helper live — new leaf module, base class, or the existing `_review_utils.py`?"
 - "I'm planning a refactor but haven't run anything — which import/boundary assumptions must the reviewer double-check?"
+- "Consolidate duplicated JSON-block parsers across PR review, address review, and CI drive-green"
+- "Can PR review, address review, and CI use `_review_utils.parse_json_block` without changing failure shapes?"
+- "A parser refactor has first fenced block vs raw JSON fallback vs trace-file behavior risks"
+- "Should `_parse_addressed_block` or a module-local `_parse_json_block` wrapper stay for import compatibility?"
+
+## Proposed Workflow
+
+> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms.
+>
+> **Heading note:** The repository validator (`scripts/validate_plugins.py`) hard-requires the
+> literal section string `## Verified Workflow`, so the long-running historical workflow remains
+> under that heading below. Phase 15 is a PLANNING capture at `unverified` level and should be read
+> as proposed until a real implementation PR and CI prove it.
+
+### Phase 15: Planning a JSON-block parser consolidation across review callers (NEW in v1.10.0, PLANNING-ONLY)
+
+The #1385 plan consolidates duplicated JSON-block parsing logic in
+`hephaestus/automation` across PR review, address review, and CI drive-green into
+`hephaestus/automation/_review_utils.py::parse_json_block`. The safe target is **not** "one
+parser shape everywhere"; it is one shared parser primitive wrapped by adapters where caller
+contracts differ.
+
+#### 15a. Inventory every parser and every public adapter before deleting wrappers
+
+Start with a current grep, then classify each hit as canonical helper, local duplicate, adapter,
+or test/import seam:
+
+```bash
+rg -n "parse_json_block|_parse_json_block|_parse_addressed_block|json.loads|```json" \
+  hephaestus/automation tests/unit/automation
+```
+
+Evidence from the #1385 plan found parser logic in `_review_utils.py:170`,
+`pr_reviewer.py:64`, `address_review.py:69`, `address_review.py:916`, and
+`ci_driver.py:2243`. It also found `_parse_addressed_block` imports at `ci_driver.py:1091`,
+`_review_phase.py:1430`, and in tests. Those import sites mean `_parse_addressed_block` must
+remain as an adapter unless the full public surface is intentionally migrated.
+
+#### 15b. Preserve caller-specific failure shapes
+
+The common parser may return a dictionary or raise/return a parse failure, but each caller has a
+different public failure contract:
+
+| Caller | Failure shape to preserve |
+| --- | --- |
+| PR review | Existing PR summary/error string behavior |
+| Address review | `{"addressed": [], "replies": {}}` |
+| CI drive-green | `{}` |
+
+Do not let a shared helper leak one caller's fallback into another caller. Keep thin local wrappers
+when they encode user-visible shape, logging, or trace-file side effects.
+
+#### 15c. Treat fenced-block selection and raw-JSON fallback as separate behavior
+
+The CI path is especially risky because `test_ci_driver.py:243` requires raw JSON fallback, while
+`ci_driver.py:2244` says the parser uses the **first** fenced block. Preserve these as distinct
+rules:
+
+1. If a fenced block exists, verify whether invalid fenced JSON should stop or fall back.
+2. If no usable fenced block exists, preserve the raw JSON fallback required by tests.
+3. Do not accidentally switch first-block to last-block semantics while deduplicating regex code.
+
+#### 15d. Preserve address-review trace files as a side effect, not parser internals
+
+`AddressReviewer._parse_json_block` currently writes
+`address-{issue_number}.parse-error.log` at `address_review.py:965`. A shared parser should not
+own address-review trace naming. Keep trace-file creation in the address-review adapter unless the
+implementation proves tests and external tooling only care about parse results.
+
+#### 15e. Confirm object-only semantics before using `dict(json.loads(...))`
+
+The plan assumes every caller can accept `dict(json.loads(...))` semantics and that parsed JSON is
+always an object. That needs explicit confirmation. Non-object JSON such as `[]`, `"x"`, or `1`
+can raise different exceptions (`TypeError`, `ValueError`) or coerce unexpectedly. Tests should pin
+the existing non-object behavior before the helper normalizes it.
+
+#### 15f. Verification gates for the implementation PR
+
+The minimum implementation evidence is:
+
+- focused unit tests for `parse_json_block` covering fenced JSON, raw JSON, invalid JSON, no JSON,
+  multiple fenced blocks, and non-object JSON;
+- caller-level tests preserving PR summary failure text, address review fallback dict + trace file,
+  and CI `{}` fallback + raw JSON fallback;
+- import/API compatibility tests or greps proving `_parse_addressed_block` still imports where
+  `ci_driver.py`, `_review_phase.py`, and tests need it;
+- a single-canonical-source grep proving the duplicate parser bodies were removed without deleting
+  adapters that encode caller behavior.
 
 ## Verified Workflow
 
@@ -1027,8 +1115,44 @@ Prove the two acceptance criteria explicitly:
 | (PLANNING #1383) Invent a new sharing mechanism for the shared helper | Considered a mixin / base class for `load_impl_session_id` | The target module `_review_utils.py` already houses cross-reviewer helpers as free functions with explicit args (`find_pr_for_issue`, `instance_log`, `parse_json_block`); a new mechanism is higher-risk | Grep the target module's existing helpers and match its established convention (free function, explicit args) rather than introducing a mixin/base-class method |
 | (PLANNING #1383) Assert un-run imports/boundary facts as true in the plan | Wrote "Path is imported", "the `from ._review_utils import ...` line exists", "no boundary violation" without executing | A planning-only plan ran nothing; stating unverified facts as certain misleads the implementer/reviewer | Hedge: "add `pathlib.Path` if not present"; "verify-and-extend the existing import line, else add"; confirm the automation→library import (`hephaestus.agents.runtime`) is the allowed direction with no cycle and that the new helper stays out of the base `import hephaestus` surface (`test_import_surface.py` / `test_automation_boundary.py`) |
 | (PLANNING #1383) Accept new structural helper tests alone as proof of a behavior-preserving refactor | Planned to add tests for `load_impl_session_id` and call the refactor done | New structural tests prove the helper exists, not that behavior is unchanged | The real acceptance gate is the PRE-EXISTING per-class suites (`test_ci_driver.py`, `test_address_review.py`) staying green, plus a single-canonical-source grep that returns exactly one hit (`grep -rn 'state_dir / f"issue-{issue_number}.json"' hephaestus/automation/`) |
+| (PLANNING #1385) Delete `pr_reviewer._parse_json_block` assuming tests only call it directly | Planned to remove the PR wrapper after routing call sites to `_review_utils.parse_json_block` | Tests or downstream code may import or monkeypatch the module-local wrapper as a seam; the plan did not confirm this with a full grep/test review | Before deleting any wrapper, grep imports and monkeypatches (`rg "_parse_json_block|patch.*parse_json" tests hephaestus`) and keep a thin adapter if compatibility is uncertain |
+| (PLANNING #1385) Treat `dict(json.loads(...))` as universally safe | Assumed parsed model output is always a JSON object and every caller can accept `dict(...)` coercion | Non-object JSON can raise a different exception or coerce in surprising ways, changing caller fallbacks (`{}`, address fallback dict, PR error string) | Add explicit non-object JSON tests and decide whether the helper rejects non-dicts or each adapter maps them to its caller-specific fallback |
+| (PLANNING #1385) Move address-review trace behavior into the shared parser | Considered centralizing parse-error diagnostics with the JSON parser itself | `AddressReviewer._parse_json_block` writes `address-{issue_number}.parse-error.log`; the filename, path, and diagnostic payload may be consumed by tests or tooling | Keep trace-file creation in the address-review adapter unless tests prove only the parsed object matters |
+| (PLANNING #1385) Collapse fenced-block parsing without pinning CI fallback semantics | Treated "parse fenced JSON" and "raw JSON fallback" as one generic parser behavior | `test_ci_driver.py:243` requires raw JSON fallback, while `ci_driver.py:2244` says first fenced block; invalid fenced JSON may or may not fall back today | Add CI caller tests for first fenced block, missing fence raw fallback, and invalid fenced JSON behavior before changing the parser |
+| (PLANNING #1385) Search only the named automation files for regex-based JSON parsers | The plan relied on hits in `_review_utils.py`, `pr_reviewer.py`, `address_review.py`, and `ci_driver.py` | Another regex-based fenced JSON parser outside those files would survive and drift | Run a repo-wide parser-pattern grep before the implementation PR, then document intentional non-target parsers separately |
 
 ## Results & Parameters
+
+### ProjectHephaestus #1385 Planning Evidence (unverified)
+
+The plan evidence used for Phase 15:
+
+- Parser logic was found in `_review_utils.py:170`, `pr_reviewer.py:64`,
+  `address_review.py:69`, `address_review.py:916`, and `ci_driver.py:2243`.
+- `test_ci_driver.py:243` requires raw JSON fallback.
+- `ci_driver.py:2244` says the CI parser uses the first fenced block.
+- `AddressReviewer._parse_json_block` currently writes
+  `address-{issue_number}.parse-error.log` at `address_review.py:965`.
+- `_parse_addressed_block` must remain as an adapter because `ci_driver.py:1091`,
+  `_review_phase.py:1430`, and tests import it.
+
+Most uncertain assumptions to hand to reviewers:
+
+- Tests may import or monkeypatch `pr_reviewer._parse_json_block`; confirm before deleting it.
+- Non-object JSON behavior may depend on exact `json.loads` / `dict(...)` exception semantics.
+- Address trace behavior may depend on exact path/name and useful diagnostic content.
+- CI behavior may distinguish invalid fenced JSON from absent fenced JSON; do not assume both fall
+  back to raw JSON.
+- There may be regex-based fenced JSON parsers outside the searched automation Python files.
+- Stale test/comment references are not the only compatibility risk; downstream import surfaces may
+  also matter.
+
+External sources not directly verified by the plan:
+
+- GitHub issue #1385 was not re-read or quoted.
+- No CI or runtime agent output was executed.
+- Current branch, dependency versions, and external trace-file consumers were not verified.
+- Mentioned skills, including `dry-refactoring-workflow`, do not prove the implementation ran.
 
 ### Radiance v1.6.0 Local Verification
 
@@ -1115,6 +1239,7 @@ def _aggregate_token_stats(self, tier_results: dict[TierID, TierResult]) -> Toke
 | ProjectHermes | #329 / PR #652 | Phase 12 — stale issue body (3 of 4 files already migrated), inline over fixture for pure HMAC helper, new-branch resolution for diverged remote | verified-ci — all pytest passed, signed commit, PR opened |
 | ProjectHephaestus | #1381 | Phase 13 — stale "6 methods / 5 byte-for-byte identical" claim (only 4 real duplicates), parameterize call-site-varying `count_noun`/`failed_header` instead of flat-merge, place helper in existing `_review_utils.py` | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 | ProjectHephaestus | #1383 | Phase 14 — planning a method→free-function extraction (`_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`) where the method is a patched test seam | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
+| ProjectHephaestus | #1385 | Phase 15 — planning a JSON-block parser consolidation (`parse_json_block` in `_review_utils.py`) across PR review, address review, and CI drive-green while preserving caller failure shapes, address trace files, CI raw JSON fallback, and adapter/import compatibility | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 
 ## Related Skills
 
@@ -1124,10 +1249,11 @@ def _aggregate_token_stats(self, tier_results: dict[TierID, TierResult]) -> Toke
 
 ## Tags
 
-`refactoring`, `dry-principle`, `helper-methods`, `radiance`, `test-fakes`, `validation-wrappers`, `layout-kernels`, `tdd`, `code-quality`, `python`, `pytest`, `private-modules`, `test-structure`, `git-signing`, `importlib-metadata`, `srp`, `extract-method`, `lru-cache`, `mock-patch`, `rglob`, `dead-code-removal`, `constants`, `frozenset`, `drift`, `intentional-variant`, `core-extras-split`, `planning`, `stale-issue-body`, `inline-vs-fixture`, `remote-branch-divergence`, `hmac`, `test-helper-dedup`, `stale-duplicate-count`, `diff-before-merge`, `parameterize-defaults`, `print-summary`, `existing-dedup-home`, `patched-test-seam`, `thin-wrapper`, `free-function-extraction`, `automation-library-boundary`
+`refactoring`, `dry-principle`, `helper-methods`, `radiance`, `test-fakes`, `validation-wrappers`, `layout-kernels`, `tdd`, `code-quality`, `python`, `pytest`, `private-modules`, `test-structure`, `git-signing`, `importlib-metadata`, `srp`, `extract-method`, `lru-cache`, `mock-patch`, `rglob`, `dead-code-removal`, `constants`, `frozenset`, `drift`, `intentional-variant`, `core-extras-split`, `planning`, `stale-issue-body`, `inline-vs-fixture`, `remote-branch-divergence`, `hmac`, `test-helper-dedup`, `stale-duplicate-count`, `diff-before-merge`, `parameterize-defaults`, `print-summary`, `existing-dedup-home`, `patched-test-seam`, `thin-wrapper`, `free-function-extraction`, `automation-library-boundary`, `json-parser`, `parse-json-block`, `address-review`, `ci-driver`, `raw-json-fallback`, `parser-contracts`, `trace-file`
 
 ## Version History
 
+- **v1.10.0** (2026-06-26, **planning-only / unverified**): Added Phase 15 — planning a JSON-block parser consolidation across ProjectHephaestus PR review, address review, and CI drive-green, captured from issue #1385 planning. Lessons: centralize shared fenced/raw parser mechanics in `_review_utils.py::parse_json_block` while preserving each caller's failure shape (PR summary strings, address review `{"addressed": [], "replies": {}}`, CI `{}`), address parse-error trace file creation (`address-{issue_number}.parse-error.log`), CI first-fenced-block and raw JSON fallback semantics, `_parse_addressed_block` adapter/import compatibility, and non-object JSON behavior. Added 5 Failed Attempts rows, a planning-evidence section, a Verified On row, trigger phrases, and parser tags. NOT executed end-to-end (no code, no tests, no CI). Frontmatter `verification` is `unverified` for this planning capture.
 - **v1.9.0** (2026-06-20, **planning-only for the new phase / unverified**): Added Phase 14 — planning a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam, captured from ProjectHephaestus #1383 (extract `_load_impl_session_id` → `load_impl_session_id(state_dir, issue_number, agent)` in `hephaestus/automation/_review_utils.py`). Five sub-sections: (14a) grep `patch.object` before deletion — keep each method as a thin wrapper to preserve the seam; (14b) read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing "near-identical" copies; (14c) match the target module's free-function convention rather than a mixin/base class; (14d) hedge unverified import/boundary assumptions (Path import, existing import line, automation→library direction, base-import-surface cleanliness); (14e) prove a pure extraction via a single-hit canonical grep + EXISTING per-class behavioral suites staying green. Added 5 Failed Attempts rows, a Verified On entry, new trigger phrases, and tags. NOT executed end-to-end (no code, no tests, no CI). The rest of the skill stays `verified-ci`; Phase 14 carries its own unverified warning. Sibling to the #1381 Phase 13 (stale-count) added the same day. Prior v1.8.0 snapshot archived to history.
 - **v1.8.0** (2026-06-20, **planning-only / unverified**): Added Phase 13 — stale "N identical duplicates" claims in extraction issues. Captured from PLANNING ProjectHephaestus issue #1381 ("Extract shared `print_worker_summary` helper"); NOT executed end-to-end (no code, no tests, no CI). Lessons: (1) an issue's duplicate COUNT and "byte-for-byte identical" assertion go stale exactly like its "Evidence:" section (extends Phase 12a) — an issue claiming "6 methods, 5 byte-for-byte identical" had only 4 true duplicates (one already delegated to a richer `ImplementationSummaryPrinter`, one with a different signature/model `PlanResult` vs `WorkerResult`); count and DIFF every claimed-duplicate body before scoping. (2) Even the 4 "identical" bodies hid two call-site-varying literals (`"Total PRs:"` vs `"Total issues:"`; leading-newline `"\nFailed issues:"` header vs none) — parameterize as kwargs-with-defaults (`count_noun=`, `failed_header=`) to guarantee zero behavior change, an application of Phase 8c classify-before-merge to a shared function's string args. (3) Placement: prefer an EXISTING established-dedup module (`_review_utils.py`, already houses #599 reviewer-trio dedup + a module `logger`) over a new leaf module or base-class method. Added 3 Failed Attempts rows and a Verified On row. Recorded most-uncertain planning assumptions as explicit risks. Prior v1.7.0 snapshot archived to history.
 - **v1.7.0** (2026-06-19): Added Phase 12 — three concrete lessons from ProjectHermes #329 (HMAC `_sign()` dedup): (1) grep the CURRENT state before trusting issue body "Evidence:" sections (prior PRs may have partially resolved it); (2) inline a pure `bytes→str` helper over adding a pytest fixture or conftest entry when the function closes over a module-local constant; (3) when a remote branch has diverged with a competing solution, push as a new branch rather than force-pushing or rebasing 84 conflicting commits. Added 3 Failed Attempts rows. Updated Verified On table. Verification: verified-ci via ProjectHermes PR #652. Prior v1.6.0 snapshot archived to history.

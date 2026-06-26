@@ -1,6 +1,61 @@
 <!-- markdownlint-disable MD024 -->
 # dry-refactoring-workflow — History
 
+## v1.10.0 (2026-06-26)
+
+**Changed by:** ProjectHephaestus issue #1385 planning — /learn
+**Verification:** unverified (planning-only; no implementation, tests, runtime agent output, or CI)
+
+### What changed
+
+- Added Phase 15 (PLANNING-ONLY, **unverified**) — planning a JSON-block parser consolidation
+  across ProjectHephaestus PR review, address review, and CI drive-green.
+- Added a `## Proposed Workflow` section with the required unverified warning, while retaining
+  `## Verified Workflow` because the current repository validator still requires that literal
+  section string.
+- Documented the core target: centralize shared parser mechanics in
+  `_review_utils.py::parse_json_block` while keeping caller-specific adapters for failure shapes,
+  trace-file side effects, and import compatibility.
+- Added 5 Failed Attempts rows covering: deleting `pr_reviewer._parse_json_block` without grep,
+  assuming `dict(json.loads(...))` is safe for non-object JSON, moving address trace behavior into
+  the shared parser, changing CI fenced/raw fallback semantics, and searching only the named files.
+- Added ProjectHephaestus #1385 planning evidence, uncertain assumptions, and external
+  unverified dependencies.
+- Added a Verified On row for ProjectHephaestus #1385, trigger phrases, and parser tags.
+- Bumped frontmatter `version` to `1.10.0`, date to `2026-06-26`, and frontmatter
+  `verification` to `unverified` per the planning-only capture requirement.
+
+### Why
+
+ProjectHephaestus issue #1385 produced an implementation plan to consolidate duplicated
+JSON-block parser logic in `hephaestus/automation` across PR review, address review, and CI
+drive-green into `hephaestus/automation/_review_utils.py::parse_json_block`. The durable lesson is
+that a parser DRY plan must preserve each caller's **contract**, not just deduplicate regex and
+`json.loads` code: PR-review summary/error shape, address-review fallback and trace file,
+CI `{}` fallback and raw-JSON fallback, first fenced block selection, `_parse_addressed_block`
+adapter compatibility, and non-object JSON behavior all need explicit reviewer attention.
+
+The plan was not executed. GitHub issue #1385 itself was not re-read, no CI/runtime output was run,
+and branch/dependency/current external trace-consumer assumptions were not verified. This entry is
+therefore intentionally `unverified`.
+
+### Previous version (v1.9.0) snapshot
+
+````markdown
+---
+name: dry-refactoring-workflow
+description: "Complete TDD-driven workflow for identifying and eliminating code duplication by extracting reusable helper methods. Use when: ... (14) PLANNING a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam ... and prove a pure extraction with a single-canonical-source grep that must return exactly one hit PLUS the PRE-EXISTING per-class behavioral suites staying green (the real acceptance gate, not the new structural tests)."
+category: architecture
+date: 2026-06-20
+version: "1.9.0"
+user-invocable: false
+verification: verified-ci
+history: dry-refactoring-workflow.history
+---
+````
+
+---
+
 ## v1.9.0 (2026-06-20)
 
 **Changed by:** ProjectHephaestus issue #1383 planning — /learn
