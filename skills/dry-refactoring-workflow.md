@@ -2,8 +2,8 @@
 name: dry-refactoring-workflow
 description: "Complete TDD-driven workflow for identifying and eliminating code duplication by extracting reusable helper methods. Use when: (1) extracting duplicated helper methods into a shared module using TDD (write a failing test against the canonical, delete the duplicate, run green); (2) creating a private leaf module with leading-underscore naming to centralize a repeated internal call (e.g. importlib.metadata version resolution, path construction) and prevent re-introduction across modules; (3) centralizing hardcoded path constants into a single module to prevent drift when directory structure changes (incl. phase-routed in_progress/completed splits); (4) deduplicating LLM JSON extraction, parser logic, or any call-site pattern copy-pasted across several files; (5) test structure must mirror source structure when extracting helpers; (6) running a full DRY consolidation pass (discovery via grep, classifying true duplicates vs intentional variants, dict-structure consolidation) and refactoring to a single canonical source; (7) extract-method / SRP decomposition of over-long functions (50-LOC) and methods (100-LOC), including converting a mutating closure into a method via a small mutable box; (8) extracting repeated cached lookups into an @lru_cache helper (and clearing the cache so unittest.mock.patch works); (9) removing stale scripts / deprecated stubs (grep callers first) and replacing hardcoded file lists with dynamic Path.rglob discovery; (10) PLANNING a consolidation of two OVERLAPPING but not-identical constant collections (frozensets / keyword lists / error-pattern tuples) — classify true-duplicate vs intentional-variant first, then extract only the shared CORE into one canonical immutable constant and have each consumer compose CORE | its-own-extras, proving anti-drift with CORE.issubset(consumer) parity tests, instead of a flat merge that would violate a deliberate behavioral contract. (11) behavior-preserving duplicate cleanup across test fakes, tiny strategy/kernel modules, and validation wrappers: keep public module exports stable, centralize only identical mechanics, preserve local wrapper names/error messages, and verify with focused + full suites before opening a PR. Also covers cryptographic commit signing requirements in PR workflows. (12) stale issue body in dedup/consolidation tasks: issue 'Evidence:' sections go stale as prior PRs partially resolve them — grep the CURRENT state first; choose inlining over fixtures for pure bytes→str helpers; resolve remote branch divergence by pushing to a new branch rather than force-pushing or rebasing 84 conflicting commits. (13) PLANNING an extraction whose issue claims 'N nearly-identical, M byte-for-byte identical' methods: the COUNT and 'byte-for-byte identical' assertions go STALE exactly like the 'Evidence:' section — count and DIFF every claimed-duplicate body in full before scoping; prior refactors may have already delegated one to a richer printer or changed another's signature/model, and even the truly-similar bodies often hide call-site-varying string args (count noun, header) that a flat merge would silently change — parameterize those as kwargs-with-defaults to guarantee zero behavior change, and place the helper in an EXISTING established-dedup module rather than a new leaf module or base-class method. (14) PLANNING a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam — grep patch.object(.*\"_method\") BEFORE planning any deletion (a method patched at many call sites must be KEPT as a one-line thin wrapper delegating to the new free function, never deleted, or every patch target breaks); read the actual test bodies to confirm which 'near-identical' differences (log level, an extra debug line, exception-message wording) are behavior-bearing vs incidental before collapsing copies (only safe to collapse logging when no test asserts log level/message); match the target module's established convention (free function taking explicit args, not a mixin/base-class method); hedge unverified import assumptions a planner did not execute (is pathlib.Path already imported? is there a 'from ._review_utils import ...' line to extend? is a cross-layer runtime import safe within the automation→library boundary AND absent from the base 'import hephaestus' surface?); and prove a pure extraction with a single-canonical-source grep that must return exactly one hit PLUS the PRE-EXISTING per-class behavioral suites staying green (the real acceptance gate, not the new structural tests). (15) PLANNING a duplicate-bearing standalone SCRIPT → library-shim consolidation when the script duplicates library logic (e.g. get_subpackages()/subpackage-mirror checks) but ALSO carries one unique function — prefer SHIM over DELETE: move the unique function into the library as the canonical source (returning a (ok, error_lines) tuple), export it from the package __init__, and rewrite the script as a thin shim importing the granular library functions — because the script is referenced by docs, a skill, AND auto-discovery smoke tests; the silent risk is OUTPUT-CONTRACT preservation: the shim must reproduce byte-for-byte stdout/stderr (literal arrow → and exact phrasing), calling the GRANULAR functions, NOT the library main()/check_test_structure (which runs extra checks the script never ran); importing a private symbol (_get_subpackages) across the script→library boundary is the most reviewer-contentious choice — offer a fallback (compute from already-returned data); record unverified reliances as explicit risks (is the script NOT wired to CI/pre-commit? does the doc/README line stay accurate once the shim is what's wired? is the single-vs-double-quote glob-marker check copied exactly?); and note the TDD INVERSION gotcha — a library test written AFTER copying the function body is GREEN-first, not RED, so don't claim a RED phase you didn't have."
 category: architecture
-date: 2026-06-26
-version: "1.10.0"
+date: 2026-06-27
+version: "1.11.0"
 user-invocable: false
 verification: unverified
 history: dry-refactoring-workflow.history
@@ -74,6 +74,10 @@ Use this workflow when you encounter:
 - "Is it OK to import a private `_get_subpackages` from the library into a sibling product script?"
 - "I copied the function body into the library, then wrote a test — is that a real RED phase?"
 - "Should the shim call the library's `main()`/`check_test_structure`, or the granular `check_*` functions?"
+- "The issue says there are many `logging.basicConfig` callers — how do I verify the current count before planning?"
+- "Refactor direct `basicConfig` callers through `setup_logging` without changing stderr/stdout, datefmt, JSON, or file-handler behavior"
+- "Remove C901 suppressions from flag-based CLI entrypoints by extracting helper functions"
+- "A stale issue mentions subcommands, but the current argparse parser is flag-based — how should the plan avoid inventing dispatch?"
 
 ## Verified Workflow
 
@@ -1089,6 +1093,103 @@ planners (and the implementer) don't claim a RED→GREEN cycle they didn't actua
 RED is wanted, write the library test (and an assertion on the exact `(ok, error_lines)` contract)
 *before* pasting the body.
 
+### Phase 16: Planning logging setup consolidation plus flag-based CLI C901 extraction (NEW in v1.11.0, PLANNING-ONLY)
+
+> **Warning:** This phase is a **proposed workflow** captured from PLANNING ProjectHephaestus
+> issue #1404. It was **NOT validated end-to-end** — no code was written, no tests were run, and
+> no CI confirmed it. Treat every step below as a hypothesis until CI confirms it on a real PR.
+> The rest of this skill is `verified-ci` (except Phases 10, 13, 14, 15, which are also
+> planning-only); this phase alone is unverified.
+
+The #1404 plan had two coupled refactors: route direct `logging.basicConfig` callers through
+`hephaestus.logging.utils.setup_logging`, and remove two `# noqa: C901` suppressions from
+`hephaestus/github/tidy.py` and `hephaestus/github/pr_merge.py` by extracting the current
+flag-based CLI control flow into helpers. The durable lesson is reviewer discipline: stale issue
+text can be directionally useful, but the plan must be anchored to the current on-disk AST and
+argparse shape.
+
+#### 16a. Treat disk state as authoritative when issue text is stale
+
+If the issue says "subcommands" or gives a count like "11+ direct `basicConfig` callers," verify
+both claims from the current tree before planning. For #1404, the current parser definitions were
+**flag-based**, not subcommand dispatch, and an AST inventory over `hephaestus/`, `scripts/`, and
+`tests/` found **9** direct `logging.basicConfig` callers. The reviewer should re-run this inventory
+before implementation because the plan's scope depends on the measured population, not the issue
+body.
+
+```bash
+python3 - <<'PY'
+import ast
+from pathlib import Path
+
+roots = [Path("hephaestus"), Path("scripts"), Path("tests")]
+
+for root in roots:
+    for path in sorted(root.rglob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        aliases = {"logging"}
+        direct_imports = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "logging":
+                        aliases.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module == "logging":
+                for alias in node.names:
+                    if alias.name == "basicConfig":
+                        direct_imports.add(alias.asname or alias.name)
+            elif isinstance(node, ast.Call):
+                func = node.func
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "basicConfig"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in aliases
+                ) or (isinstance(func, ast.Name) and func.id in direct_imports):
+                    print(f"{path}:{node.lineno}")
+PY
+```
+
+#### 16b. Extend `setup_logging` only with behavior-parity evidence
+
+The riskiest assumption in the plan is that `setup_logging` can accept new `datefmt` and
+`log_to_stdout` knobs without changing existing JSON/log handler behavior. A reviewer should require
+tests that prove:
+
+- `log_to_stdout=False, log_to_stderr=True` preserves `logging.basicConfig`'s default stderr
+  behavior for current stderr callers.
+- Existing JSON formatting and existing file-handler behavior are unchanged.
+- Every converted caller's previous `format`, `datefmt`, `stream`, and `filename`/file-handler
+  behavior is represented in a parity table before code changes.
+- Adding a new option does not accidentally install duplicate stream handlers on repeated setup
+  calls.
+
+#### 16c. Preserve flag-based CLI semantics; do not invent fake subcommand dispatch
+
+When the current parser is flag-based, extract helpers around the existing branch structure. Do not
+rewrite the plan around subcommands just because stale issue text mentions them. For `tidy.py` and
+`pr_merge.py`, the safe planning target is "extract helper functions for the current flag-driven
+paths," then cover those helpers with behavior-focused tests. The risk is a clean-looking extraction
+that silently changes precedence between flags, defaults, prompts, dry-run paths, or error exits.
+
+#### 16d. Reviewer checklist for this combined refactor
+
+Before approving implementation, reviewers should check:
+
+1. **AST inventory is structural and repo-wide.** It catches `import logging as log`,
+   `from logging import basicConfig as bc`, and ordinary `logging.basicConfig`; it scans all three
+   roots: `hephaestus/`, `scripts/`, and `tests/`.
+2. **No fake subcommand dispatch was introduced.** Any new helper names and tests reflect the
+   current flag-based parser, not a stale subcommand model.
+3. **Stream/datefmt/file parity is explicit per caller.** Every converted caller has a before/after
+   row for formatter string, datefmt, stdout/stderr stream, and file handler behavior.
+4. **`tidy` and `pr_merge` tests are behavior-focused.** They exercise the extracted flag-control
+   helpers enough that removing `# noqa: C901` is a result of real decomposition, not just moving
+   branches around until the McCabe score drops.
+5. **C901 subtraction-chain estimates are treated as provisional.** The plan can estimate that
+   helper extraction will drop below the threshold, but implementation must re-run Ruff after the
+   actual extraction because branch interactions often leave more complexity behind than expected.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -1133,8 +1234,40 @@ RED is wanted, write the library test (and an assertion on the exact `(ok, error
 | (PLANNING #1504) Import the private `_get_subpackages` from the library without a fallback | Planned `from hephaestus.validation.test_structure import _get_subpackages` in the product script | A leading-underscore import across the script→library boundary is the most reviewer-contentious choice; a reviewer may reject it outright | Offer a fallback (compute the subpackage count from data the PUBLIC functions already return) and present both options so the reviewer has an out |
 | (PLANNING #1504) Claim a RED→GREEN TDD cycle for the new library test | The plan added a test class for `check_scripts_coverage` after copying its body into the library | The function body already existed (copied verbatim from the script), so the test passes immediately — it is GREEN-first, there was no genuine RED phase | Note the inversion honestly; if a real RED is wanted, write the library test + exact `(ok, error_lines)` contract assertion BEFORE pasting the body |
 | (PLANNING #1504) Assume `scripts/README.md` and the not-wired-to-CI claim need no re-check | Plan asserted the script is not in CI/pre-commit (only `hephaestus-check-test-structure` is wired) and the README line stays accurate | These were grep-claimed but un-run reliances; once the shim is what's transitively wired, the README "Wired into pre-commit" line may read as inaccurate, and a CI-wired script would make the output contract a gate not a smoke test | Record un-run reliances as explicit RISKS for the reviewer: re-confirm the script is not CI/pre-commit-wired, re-judge the README accuracy, and diff the copied glob-marker check (`glob("*.py")` AND `glob('*.py')`) line-by-line or the broken-glob test gives a false pass |
+| (PLANNING #1404) Trust the issue body's caller count and parser shape | Issue text apparently mentioned subcommands and 11+ direct `logging.basicConfig` callers | Current disk state differed: parser definitions were flag-based and AST discovery over `hephaestus/`, `scripts/`, and `tests/` found 9 direct callers | Treat issue text as a hint. Re-run structural AST inventory and read parser definitions before implementation; scope the plan from disk reality |
+| (PLANNING #1404) Extend `setup_logging` without proving handler parity | Planned to add `datefmt` and `log_to_stdout` so direct `basicConfig` callers can route through `setup_logging` | This assumes existing JSON formatter behavior, file handlers, duplicate-handler behavior, and default stderr behavior remain unchanged | Require per-caller parity rows and tests for stderr/stdout, `datefmt`, JSON formatting, and file handlers before converting callers |
+| (PLANNING #1404) Rewrite flag-based CLIs as if they had subcommands | A stale issue phrase could lead the plan toward subcommand-style dispatch helpers | Introducing fake subcommand dispatch changes the mental model and may alter flag precedence/default paths | Extract helpers around the current flag-based control flow; tests should name and exercise flag paths, not invented subcommands |
+| (PLANNING #1404) Treat C901 subtraction estimates as proof | Estimated that extracting helper functions from `tidy.py` and `pr_merge.py` would remove two C901 suppressions | McCabe complexity only proves out after the actual branch structure is extracted; small leftover conditionals can keep C901 above threshold | Re-run Ruff after implementation and keep behavior-focused helper tests for the original CLI paths before removing `# noqa: C901` |
 
 ## Results & Parameters
+
+### ProjectHephaestus #1404 Planning Inventory Template
+
+Use this checklist before implementing a `basicConfig`→`setup_logging` plus C901-extraction plan:
+
+```text
+Issue premise:
+- Claimed parser shape:
+- Current parser shape from disk:
+- Claimed direct basicConfig callers:
+- AST-discovered direct basicConfig callers across hephaestus/, scripts/, tests/:
+
+Per-caller logging parity table:
+- file:line
+- old format:
+- old datefmt:
+- old stream/stdout/stderr:
+- old file handler / filename:
+- setup_logging args:
+- test that proves parity:
+
+CLI C901 extraction table:
+- module:
+- current flags and precedence:
+- helper(s) to extract:
+- behavior-focused tests covering helper branches:
+- Ruff C901 result after extraction:
+```
 
 ### Radiance v1.6.0 Local Verification
 
@@ -1222,6 +1355,7 @@ def _aggregate_token_stats(self, tier_results: dict[TierID, TierResult]) -> Toke
 | ProjectHephaestus | #1381 | Phase 13 — stale "6 methods / 5 byte-for-byte identical" claim (only 4 real duplicates), parameterize call-site-varying `count_noun`/`failed_header` instead of flat-merge, place helper in existing `_review_utils.py` | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 | ProjectHephaestus | #1383 | Phase 14 — planning a method→free-function extraction (`_load_impl_session_id` → `load_impl_session_id` in `_review_utils.py`) where the method is a patched test seam | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 | ProjectHephaestus | #1504 | Phase 15 — planning a duplicate-bearing script → library-shim consolidation (`scripts/check_unit_test_structure.py` → shim over `hephaestus/validation/test_structure.py`); move unique `check_scripts_coverage` into the library, preserve byte-for-byte stdout/stderr via granular fns | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
+| ProjectHephaestus | #1404 | Phase 16 — planning direct `logging.basicConfig` callers through `setup_logging` plus removing C901 suppressions from flag-based `tidy.py`/`pr_merge.py` helpers; current disk state over stale issue text, AST inventory, logging parity, and reviewer checklist | ⚠️ **unverified — planning only, NOT executed** (no code, no tests, no CI) |
 
 ## Related Skills
 
@@ -1231,10 +1365,11 @@ def _aggregate_token_stats(self, tier_results: dict[TierID, TierResult]) -> Toke
 
 ## Tags
 
-`refactoring`, `dry-principle`, `helper-methods`, `radiance`, `test-fakes`, `validation-wrappers`, `layout-kernels`, `tdd`, `code-quality`, `python`, `pytest`, `private-modules`, `test-structure`, `git-signing`, `importlib-metadata`, `srp`, `extract-method`, `lru-cache`, `mock-patch`, `rglob`, `dead-code-removal`, `constants`, `frozenset`, `drift`, `intentional-variant`, `core-extras-split`, `planning`, `stale-issue-body`, `inline-vs-fixture`, `remote-branch-divergence`, `hmac`, `test-helper-dedup`, `stale-duplicate-count`, `diff-before-merge`, `parameterize-defaults`, `print-summary`, `existing-dedup-home`, `patched-test-seam`, `thin-wrapper`, `free-function-extraction`, `automation-library-boundary`, `script-to-library-shim`, `shim-vs-delete`, `output-contract-preservation`, `byte-for-byte-stdout`, `granular-vs-main`, `private-import-boundary`, `tdd-green-first-inversion`, `duplicate-bearing-script`
+`refactoring`, `dry-principle`, `helper-methods`, `radiance`, `test-fakes`, `validation-wrappers`, `layout-kernels`, `tdd`, `code-quality`, `python`, `pytest`, `private-modules`, `test-structure`, `git-signing`, `importlib-metadata`, `srp`, `extract-method`, `lru-cache`, `mock-patch`, `rglob`, `dead-code-removal`, `constants`, `frozenset`, `drift`, `intentional-variant`, `core-extras-split`, `planning`, `stale-issue-body`, `inline-vs-fixture`, `remote-branch-divergence`, `hmac`, `test-helper-dedup`, `stale-duplicate-count`, `diff-before-merge`, `parameterize-defaults`, `print-summary`, `existing-dedup-home`, `patched-test-seam`, `thin-wrapper`, `free-function-extraction`, `automation-library-boundary`, `script-to-library-shim`, `shim-vs-delete`, `output-contract-preservation`, `byte-for-byte-stdout`, `granular-vs-main`, `private-import-boundary`, `tdd-green-first-inversion`, `duplicate-bearing-script`, `logging-basicconfig`, `setup-logging`, `ast-inventory`, `flag-based-cli`, `c901-extraction`, `tidy`, `pr-merge`
 
 ## Version History
 
+- **v1.11.0** (2026-06-27, **planning-only for the new phase / unverified**): Added Phase 16 — planning a direct `logging.basicConfig` → `hephaestus.logging.utils.setup_logging` consolidation plus flag-based CLI helper extraction to remove C901 suppressions, captured from ProjectHephaestus #1404. Key lessons: (16a) treat disk state as authoritative when stale issue text claims subcommands or 11+ callers; re-run a structural AST inventory over `hephaestus/`, `scripts/`, and `tests/` (including logging aliases) because the plan found 9 direct callers and current parsers were flag-based; (16b) extending `setup_logging` with `datefmt` and `log_to_stdout` is risky until tests prove stderr/stdout, JSON formatter, file-handler, and duplicate-handler parity; (16c) extract helpers around the existing flag-based `tidy.py`/`pr_merge.py` control flow, not invented subcommand dispatch; (16d) treat C901 subtraction-chain estimates as provisional until Ruff runs on the actual extraction. Added 4 Failed Attempts rows, a planning inventory template, a Verified On entry, trigger phrases, and tags. Bumped frontmatter `version` to 1.11.0, `date` to 2026-06-27, and kept `verification: unverified`. NOT executed end-to-end (no code, no tests, no CI). Prior v1.10.0 snapshot archived to history.
 - **v1.10.0** (2026-06-26, **planning-only for the new phase / unverified**): Added Phase 15 — planning a duplicate-bearing standalone script → library-shim consolidation with output-contract preservation, captured from ProjectHephaestus #1504 (`scripts/check_unit_test_structure.py` duplicates `get_subpackages()`/subpackage-mirror logic in `hephaestus/validation/test_structure.py` but uniquely owns `check_scripts_coverage()`). Five sub-sections: (15a) SHIM over DELETE — move the unique function into the library as canonical `(ok, error_lines)`, export from `hephaestus/validation/__init__.py`, rewrite the script as a thin shim, because the script is referenced by `scripts/README.md`, the `python-repo-modernization` skill, and auto-discovery smoke tests (`tests/unit/scripts/conftest.py`); (15b) output-contract preservation — reproduce byte-for-byte stdout/stderr (literal `→` arrow, exact phrasing) by calling the GRANULAR functions (`check_test_directory_mirrors` + `check_scripts_coverage`), NOT `main()`/`check_test_structure` which run extra no-loose-files/no-unsanctioned-dirs checks the script never ran; (15c) the private `_get_subpackages` import across the script→library boundary is the reviewer-contentious choice — offer a data-derived fallback; (15d) record un-run reliances as explicit risks (not-CI/pre-commit-wired claim, README accuracy judgment call, exact single-vs-double-quote glob-marker check copied verbatim); (15e) TDD GREEN-first inversion — a library test written after copying the body is not RED, don't claim a cycle you didn't have. Added 5 Failed Attempts rows, a Verified On entry, trigger phrases, and tags. Bumped frontmatter `version` to 1.10.0, `date` to 2026-06-26, and `verification` to `unverified`. NOT executed end-to-end (no code, no tests, no CI). Sibling to the planning-only Phases 10/13/14. Prior v1.9.0 snapshot archived to history.
 - **v1.9.0** (2026-06-20, **planning-only for the new phase / unverified**): Added Phase 14 — planning a behavior-preserving method→free-function extraction when the duplicated method is a patched test seam, captured from ProjectHephaestus #1383 (extract `_load_impl_session_id` → `load_impl_session_id(state_dir, issue_number, agent)` in `hephaestus/automation/_review_utils.py`). Five sub-sections: (14a) grep `patch.object` before deletion — keep each method as a thin wrapper to preserve the seam; (14b) read tests to separate behavior-bearing diffs (log level/message) from incidental ones before collapsing "near-identical" copies; (14c) match the target module's free-function convention rather than a mixin/base class; (14d) hedge unverified import/boundary assumptions (Path import, existing import line, automation→library direction, base-import-surface cleanliness); (14e) prove a pure extraction via a single-hit canonical grep + EXISTING per-class behavioral suites staying green. Added 5 Failed Attempts rows, a Verified On entry, new trigger phrases, and tags. NOT executed end-to-end (no code, no tests, no CI). The rest of the skill stays `verified-ci`; Phase 14 carries its own unverified warning. Sibling to the #1381 Phase 13 (stale-count) added the same day. Prior v1.8.0 snapshot archived to history.
 - **v1.8.0** (2026-06-20, **planning-only / unverified**): Added Phase 13 — stale "N identical duplicates" claims in extraction issues. Captured from PLANNING ProjectHephaestus issue #1381 ("Extract shared `print_worker_summary` helper"); NOT executed end-to-end (no code, no tests, no CI). Lessons: (1) an issue's duplicate COUNT and "byte-for-byte identical" assertion go stale exactly like its "Evidence:" section (extends Phase 12a) — an issue claiming "6 methods, 5 byte-for-byte identical" had only 4 true duplicates (one already delegated to a richer `ImplementationSummaryPrinter`, one with a different signature/model `PlanResult` vs `WorkerResult`); count and DIFF every claimed-duplicate body before scoping. (2) Even the 4 "identical" bodies hid two call-site-varying literals (`"Total PRs:"` vs `"Total issues:"`; leading-newline `"\nFailed issues:"` header vs none) — parameterize as kwargs-with-defaults (`count_noun=`, `failed_header=`) to guarantee zero behavior change, an application of Phase 8c classify-before-merge to a shared function's string args. (3) Placement: prefer an EXISTING established-dedup module (`_review_utils.py`, already houses #599 reviewer-trio dedup + a module `logger`) over a new leaf module or base-class method. Added 3 Failed Attempts rows and a Verified On row. Recorded most-uncertain planning assumptions as explicit risks. Prior v1.7.0 snapshot archived to history.
