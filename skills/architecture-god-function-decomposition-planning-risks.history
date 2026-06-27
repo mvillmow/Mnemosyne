@@ -1,3 +1,27 @@
+# architecture-god-function-decomposition-planning-risks — History
+
+## v1.3.0 (2026-06-27)
+
+**Changed by:** ProjectHephaestus issue #1407 fleet-sync package decomposition planning review
+**Verification:** unverified
+
+### What changed
+
+- Added package-conversion and facade-preservation review risks for `module.py` to `module/` splits.
+- Added reviewer checks for console entry point resolution, compatibility exports, import-cycle boundaries, and monkeypatch target preservation.
+- Added conflict-resolution side-effect risks covering dry-run behavior, timeout propagation, rebase abort, worktree cleanup, pushed-branch verification, and no-conflict rebase continuation.
+- Added test-move coverage risks for package decomposition plans.
+
+### Why
+
+The issue #1407 plan was a planning artifact, not an implementation verification pass. It cited
+current file references and AST measurements and proposed helper extraction arithmetic, but the
+most important reviewer work is verifying that facade imports, console script resolution, import
+boundaries, dry-run semantics, cleanup behavior, return values, and canonical patch targets survive
+the package split.
+
+### Previous version (v1.2.0) snapshot
+
 ---
 name: architecture-god-function-decomposition-planning-risks
 description: >-
@@ -7,13 +31,11 @@ description: >-
   file locations — before finalizing an extraction plan that waives work on a
   function, verify on disk that the cited size matches reality; apply the
   sentinel return pattern for extracted poll loops; verify test file existence
-  before writing stubs; audit plan documents for helper-defined-but-never-called
-  inconsistencies; and treat package-conversion/facade-preserving decomposition
-  plans as unverified until console entry points, facade exports, import-cycle
-  guards, dry-run behavior, patch targets, and moved-test coverage are proven.
+  before writing stubs; and audit plan documents for helper-defined-but-never-called
+  inconsistencies.
 category: architecture
-date: 2026-06-27
-version: "1.3.0"
+date: 2026-06-13
+version: "1.2.0"
 user-invocable: false
 history: architecture-god-function-decomposition-planning-risks.history
 verification: unverified
@@ -36,11 +58,6 @@ tags:
   - loop-body-measurement
   - docstring-budget
   - return-type-tracing
-  - package-decomposition
-  - facade-exports
-  - import-cycle-guards
-  - patch-targets
-  - dry-run-semantics
 ---
 
 # Architecture: God-Function Decomposition — Planning Risks
@@ -49,11 +66,10 @@ tags:
 
 | Field | Value |
 | ------- | ------- |
-| **Date** | 2026-06-27 |
-| **Source issue** | ProjectHephaestus #1180 and #1407 — god-function/package decomposition planning reviews |
+| **Date** | 2026-06-13 |
+| **Source issue** | ProjectHephaestus #1180 — decompose 5 god-functions in `hephaestus/automation/` |
 | **Verification** | unverified (planning-phase learnings; no code ran) |
 | **Objective** | Document recurring planning-phase failure modes when working from issue-cited metadata rather than disk reality |
-| **History** | [changelog](./architecture-god-function-decomposition-planning-risks.history) |
 
 These risks surface whenever an engineer or agent plans god-function extractions from
 an issue description that cites line numbers, function sizes, or file paths. The
@@ -69,14 +85,10 @@ Use this skill when:
 2. Reviewing a decomposition plan before approving it — check that each cited function size was measured from disk, not from the issue body.
 3. Implementing a decomposition plan produced by another agent or engineer — verify all arithmetic, helper call sites, and test file assumptions before writing code.
 4. Authoring decomposition plans for ProjectHephaestus `hephaestus/automation/` modules (where the 80-line orchestrator cap is enforced).
-5. Reviewing a plan that converts a module file into a package directory while promising facade imports and console-script compatibility will stay stable.
-6. Reviewing conflict-resolution or fleet-sync decompositions where dry-run semantics, rebase abort behavior, worktree cleanup, pushed-branch verification, or monkeypatch targets are part of the behavioral contract.
 
 ---
 
 ## Verified Workflow
-
-> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms.
 
 ### Quick Reference
 
@@ -445,156 +457,6 @@ discrepancy in the plan and proceed from disk reality.
 
 ---
 
-## Risk 10: Module-to-Package Conversion Is a Compatibility Surface, Not Just a Move
-
-**What happened**: A plan for ProjectHephaestus issue #1407 proposed converting
-`hephaestus/github/fleet_sync.py` into a `hephaestus.github.fleet_sync` package while
-preserving `pyproject.toml` console resolution at `hephaestus.github.fleet_sync:main` and
-compatibility imports such as `PRInfo`, `PRStatus`, `_ci_state`, `get_resign_email`, and
-`main` from `hephaestus.github.fleet_sync`.
-
-**The failure mode**: Python import resolution may continue to work for the package, but
-the facade can silently omit an exported name, bind a moved function through a new module
-that breaks existing monkeypatch targets, or change console-script startup behavior. A
-reviewer who treats the change as a file move misses the public API surface created by the
-old module path.
-
-**Rule**: For a module-to-package decomposition plan, require explicit smoke tests before
-approval:
-
-```bash
-python -c "from hephaestus.github.fleet_sync import PRInfo, PRStatus, _ci_state, get_resign_email, main; print(main)"
-python -c "import importlib; mod = importlib.import_module('hephaestus.github.fleet_sync'); assert callable(mod.main)"
-python -c "import hephaestus.github.fleet_sync as fs; print(fs.__file__)"
-```
-
-If the console entry point is declared as `hephaestus.github.fleet_sync:main`, the plan must
-say which file owns `main` after the split, how the package `__init__` re-exports it, and
-which tests prove the entry point still resolves in an installed/editable environment.
-
----
-
-## Risk 11: Helper Arithmetic Does Not Prove Behavior Preservation
-
-**What happened**: The same #1407 plan relied on exact helper extraction and subtraction
-arithmetic for `list_prs`, `resolve_conflict_with_agent`, and `process_repo`. It also
-proposed conflict-resolution decomposition and agent-dispatch paths where side effects are
-the real contract.
-
-**The failure mode**: A plan can make a function shorter while changing behavior through
-subtle side-effect drift: missing log lines, different timeout propagation, dry-run actions
-that now mutate, rebase abort not running on failure, pushed-branch verification moving to
-the wrong branch, return values collapsing distinct cases, or tests patching the old module
-while production code now calls through a new submodule binding.
-
-**Rule**: Treat line-count subtraction as necessary but insufficient. Reviewers must trace
-the extracted code for these contracts before approving:
-
-```text
-For each proposed helper:
-- Side effects: same git/GitHub calls, in the same dry-run vs real-run conditions?
-- Logs: same user-visible messages and warning/error branches?
-- Timeouts: timeout values passed through unchanged to agent and gh/git commands?
-- Return values: every caller branch still sees the same sentinel/data shape?
-- Cleanup: worktree cleanup, rebase abort, and temporary branch cleanup still run on exceptions?
-- Patch targets: existing tests patch the name that production code actually resolves?
-```
-
-For conflict-resolution helpers, require tests for no-conflict rebase continuation,
-dry-run no-op behavior, rebase abort on failure, pushed-branch verification, and cleanup
-after agent dispatch failure.
-
----
-
-## Risk 12: New Shared Modules Can Violate Import-Cycle Boundaries
-
-**What happened**: The #1407 plan proposed moving shared git operations into
-`hephaestus/github/git_ops.py` while explicitly noting that `hephaestus.github` must stay
-free of `hephaestus.automation` imports because `tests/unit/utils/test_no_import_cycles.py`
-guards that boundary.
-
-**The failure mode**: A helper extracted from `fleet_sync.py` can carry an automation-layer
-import with it, or a facade can import submodules in an order that introduces a cycle only
-at package import time. Static review of the intended file layout is not enough; the cycle
-appears when import execution happens.
-
-**Rule**: The plan must prove the direction of dependencies with execution-backed checks:
-
-```bash
-python -c "import hephaestus.github; import hephaestus.github.fleet_sync; import hephaestus.github.git_ops"
-python -m pytest tests/unit/utils/test_no_import_cycles.py -q
-```
-
-If a moved helper needs an agent, planner, or automation runtime import, it does not belong
-in `hephaestus.github.git_ops.py`. Put the automation-specific wrapper above the GitHub
-package boundary and keep the shared module limited to git/GitHub primitives.
-
----
-
-## Risk 13: Test Moves Can Weaken Coverage While Looking Like Organization
-
-**What happened**: The #1407 plan proposed moving tests into more specific files and adding
-new module/facade tests under `tests/unit/github`, while also relying on existing coverage
-around facade exports and canonical patch targets.
-
-**The failure mode**: Test churn can preserve the total number of files while dropping the
-behavioral tests that mattered: the old facade import path, the old monkeypatch path,
-console entry point resolution, conflict dry-run semantics, or import-cycle protection.
-Moving tests before proving parity makes review harder because deleted assertions are
-hidden inside a large rename/split diff.
-
-**Rule**: Review test moves as behavior changes unless the PR proves assertion parity.
-Require a before/after checklist:
-
-```text
-- Old facade import path still tested?
-- Console entry point still tested?
-- Canonical monkeypatch targets documented and tested after extraction?
-- Dry-run, timeout, cleanup, and pushed-branch verification branches still covered?
-- Import-cycle guard still runs and still fails if github imports automation?
-- Moved tests preserve assertion intent, not just filenames and class names?
-```
-
-For large package splits, ask for focused new facade tests plus unchanged behavioral tests
-before approving broad test-file reorganization.
-
----
-
-## Risk 14: Planning File References Are Evidence Pointers, Not Verified Facts
-
-**What happened**: The #1407 plan cited specific planning-pass references such as
-`pyproject.toml:101`, `hephaestus/github/fleet_sync.py` line ranges,
-`hephaestus/github/tidy.py:92-140`, `hephaestus/github/__init__.py:24-27`, and tests under
-`tests/unit/github` plus `tests/unit/utils/test_no_import_cycles.py`.
-
-**The failure mode**: A reviewer may read the plan as if those references are current
-implementation facts. They are only evidence pointers captured during planning. Any issue
-text, prior function count, line number, or AST measurement can drift before
-implementation starts.
-
-**Rule**: Before approving implementation, re-run the measurements and re-open every cited
-file that anchors a risky assumption:
-
-```bash
-python - <<'PY'
-import ast
-from pathlib import Path
-path = Path("hephaestus/github/fleet_sync.py")
-tree = ast.parse(path.read_text())
-for node in ast.walk(tree):
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-        if node.name in {"list_prs", "resolve_conflict_with_agent", "process_repo"}:
-            print(f"{node.name}: {node.lineno}-{node.end_lineno} ({node.end_lineno - node.lineno + 1}L)")
-PY
-
-rg -n "hephaestus.github.fleet_sync|fleet_sync:main|PRInfo|PRStatus|_ci_state|get_resign_email" pyproject.toml hephaestus tests
-```
-
-If the plan's exact line numbers have drifted, require the implementation to anchor edits
-by symbol, unique text, or AST structure rather than stale absolute coordinates.
-
----
-
 ## Failed Attempts
 
 ### R1: Single Helper Insufficient for `_run_implementation_and_review` (130L)
@@ -707,39 +569,6 @@ every defined helper has at least one shown call site.
 
 ---
 
-### Issue #1407: Treating Facade-Preserving Package Conversion as a Rename
-
-**What was tried**: A planning pass assumed converting `fleet_sync.py` into a
-`fleet_sync/` package would preserve `hephaestus.github.fleet_sync:main` console
-resolution and old imports from `hephaestus.github.fleet_sync` as long as the package
-facade re-exported names.
-
-**Why it failed as a reviewed assumption**: The learn turn did not execute an installed
-entry-point smoke test, import the facade symbols, or prove that existing monkeypatch
-targets still resolve to the objects production code calls after extraction.
-
-**Lesson**: Facade-preserving package conversion needs explicit import/entry-point/identity
-tests in the plan. Do not let "same dotted path" substitute for executed compatibility
-checks.
-
----
-
-### Issue #1407: Subtraction Arithmetic Was Treated as Behavioral Evidence
-
-**What was tried**: The plan proposed exact helper extractions for `list_prs`,
-`resolve_conflict_with_agent`, and `process_repo`, then used subtraction arithmetic to show
-the functions would shrink.
-
-**Why it failed as a complete review standard**: Shorter functions can still change
-behavior. The plan's risk surface includes dry-run semantics, log output, timeout
-propagation, rebase abort behavior, worktree cleanup, pushed-branch verification,
-no-conflict rebase continuation, return-value sentinels, and test monkeypatch targets.
-
-**Lesson**: Arithmetic proves scope, not equivalence. Plan reviewers must pair every
-line-count claim with a side-effect and call-target preservation check.
-
----
-
 ## Planning Checklist for God-Function Decomposition
 
 Before submitting or approving a god-function decomposition plan:
@@ -780,23 +609,6 @@ Before submitting or approving a god-function decomposition plan:
     [ ] Read the downstream function's first 20 lines
     [ ] Confirm it handles the empty value correctly
     [ ] Cite the verification in the plan (file:line range)
-
-[ ] For each module-to-package split:
-    [ ] Confirm the declared console entry point still resolves after install
-    [ ] Import every old facade compatibility symbol from the old dotted path
-    [ ] Confirm package __init__ exports the intended public/private compatibility names
-    [ ] Prove production call sites and test monkeypatch targets still hit the same object
-    [ ] Anchor edits by symbol/AST after the first deletion, not stale line numbers
-
-[ ] For each shared helper module introduced below a package boundary:
-    [ ] Prove it does not import forbidden higher-level packages
-    [ ] Run the import-cycle guard that protects the boundary
-    [ ] Keep automation/agent dispatch wrappers above library/GitHub primitives
-
-[ ] For each moved test file:
-    [ ] Preserve assertion intent, not just filename/class structure
-    [ ] Keep old facade import-path tests and add new submodule tests
-    [ ] Confirm dry-run, timeout, cleanup, pushed-branch verification, and error branches remain covered
 ```
 
 ---
@@ -811,8 +623,6 @@ Before submitting or approving a god-function decomposition plan:
 | grep-by-name before grep-by-line | ProjectHephaestus #1180 R1 | Found `_run_impl_review_loop` moved from `ci_driver.py:1513` to `_review_phase.py:374` |
 | Subtraction arithmetic chain | ProjectHephaestus #1180 R1 | Revealed 5 extractions needed (not 3) for `_run_ci_fix_session` to reach ≤80L |
 | Sentinel return contract docstring | ProjectHephaestus #1180 R1 | Made all 3 control-flow states explicit; prevented silent fall-through bugs |
-| Facade import smoke tests | ProjectHephaestus #1407 plan review learning | Required before trusting a `module.py` to `module/` package conversion that preserves old dotted imports and console entry points |
-| Side-effect preservation audit | ProjectHephaestus #1407 plan review learning | Separates line-count success from behavior preservation for dry-run, timeout, cleanup, rebase, push-verification, and monkeypatch-target contracts |
 
 ### Key Thresholds (ProjectHephaestus)
 
@@ -844,27 +654,6 @@ for node in ast.walk(tree):
   = <remaining>L (target ≤ <cap>L) ✓/✗
 ```
 
-### Copy-Paste: Package Decomposition Review Checklist
-
-```text
-Package split under review:
-- Old module path:
-- New package path:
-- New helper modules:
-- Console entry point(s):
-- Facade compatibility symbols:
-
-Evidence required before approval:
-- [ ] `python -c "from <old.dotted.path> import <symbols>"` passes
-- [ ] Console entry point resolves to the same callable after editable/install context
-- [ ] Import-cycle guard passes for the package boundary
-- [ ] Existing monkeypatch paths still patch production call targets
-- [ ] Dry-run path performs no mutations
-- [ ] Rebase/conflict path aborts and cleans worktrees on failure
-- [ ] Pushed-branch verification still checks the intended branch/ref
-- [ ] Moved tests preserve old assertions and add facade tests instead of replacing them
-```
-
 ---
 
 ## Verified On
@@ -874,4 +663,3 @@ Evidence required before approval:
 | ProjectHephaestus (R0) | Planning session for issue #1180 — decompose 5 god-functions in `hephaestus/automation/`; `_implement_issue` cited as 354 lines in issue, found as 127 lines on disk; `_run_impl_review_loop` cited at `ci_driver.py:1513`, found at `_review_phase.py:374-503`; `_finalize_address_state` defined in plan but not called in replacement block; test file existence unverified; `_poll_ci_until_concluded` sentinel contract risk identified |
 | ProjectHephaestus (R1) | Second planning iteration for issue #1180 after R0 NOGO review; AST re-measurement confirmed `_implement_issue` is 128L not 354L and `_run_impl_review_loop` is at `_review_phase.py:374`; arithmetic subtraction chain revealed `_run_ci_fix_session` needs 5 helpers (not 3) to reach ≤80L; `_run_address_step_if_needed` sentinel return pattern documented with all 3 control-flow states; R0 waiver-on-"marginal" grounds rejected — 128L = 60% over cap and is in scope |
 | ProjectHephaestus | Issue #1180 R2 plan (2026-06-13) — 3rd TASK/PLAN/REVIEW cycle; all 7 target functions scoped to ≤80L |
-| ProjectHephaestus | Issue #1407 planning artifact (2026-06-27) — unverified plan for splitting `hephaestus/github/fleet_sync.py` into a package plus `hephaestus/github/git_ops.py`; learn turn did not execute implementation, import smoke tests, console entry point checks, or CI |
