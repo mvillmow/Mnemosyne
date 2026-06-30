@@ -1,11 +1,11 @@
 ---
 name: audit-remediation-verify-evidence-before-planning
-description: "Before planning a fix for an audit/remediation issue, verify the audit's cited evidence (file:line) against the live tree — audit findings go stale once the target is independently remediated, and an audit that names SEVERAL targets can have a SUBSET already fixed. Re-read EVERY cited file:line before planning, fix ONLY the issue-named targets (a repo-wide survey will surface more non-compliant siblings — note them out-of-scope, do not expand the PR), and do not invent a unit test for a doc/UX field that has no test contract. When a doc-table column is genuinely UN-RECOVERABLE from the repo (e.g. a semantic-version 'Added' anchor), INFER it but LABEL the provenance honestly as best-effort, and design any drift-guard to validate ONLY the verifiable invariant (table membership vs live __all__), never the inferred value. CRITICAL: a predecessor issue's plan being captured in a skill does NOT mean it shipped — re-verify the artifact exists on disk (test -f) before assuming prior work is done. Use when: (1) planning a fix for an audit-filed issue with file:line evidence, (2) the issue spans multiple repos or submodules, (3) the issue recommends doc/field-name/frontmatter changes that may already be done, (4) the audit names multiple targets and any subset may already be remediated, (5) you must author a doc table that mixes a verifiable column (symbol membership) and an unverifiable column (which version first shipped it), (6) a prior/predecessor issue claims to have introduced an artifact (a guard, a doc table) that this issue builds on — confirm it actually landed before assuming it exists."
+description: "Before planning a fix for an audit/remediation issue, verify the audit's cited evidence (file:line) against the live tree — audit findings go stale once the target is independently remediated, and an audit that names SEVERAL targets can have a SUBSET already fixed. Re-read EVERY cited file:line before planning, fix ONLY the issue-named targets (a repo-wide survey will surface more non-compliant siblings — note them out-of-scope, do not expand the PR), and do not invent a unit test for a doc/UX field that has no test contract. When a doc-table column is genuinely UN-RECOVERABLE from the repo (e.g. a semantic-version 'Added' anchor), INFER it but LABEL the provenance honestly as best-effort, and design any drift-guard to validate ONLY the verifiable invariant (table membership vs live __all__), never the inferred value. CRITICAL: a predecessor issue's plan being captured in a skill does NOT mean it shipped — re-verify the artifact exists on disk (test -f) before assuming prior work is done. For call-time-local-import or parser-cleanup audit findings, verify the live branch, import placement, and delegation semantics before planning edits; the correct outcome may be no source edit plus evidence, not style-only tests or duplicated parsing logic. Use when: (1) planning a fix for an audit-filed issue with file:line evidence, (2) the issue spans multiple repos or submodules, (3) the issue recommends doc/field-name/frontmatter changes that may already be done, (4) the audit names multiple targets and any subset may already be remediated, (5) you must author a doc table that mixes a verifiable column (symbol membership) and an unverifiable column (which version first shipped it), (6) a prior/predecessor issue claims to have introduced an artifact (a guard, a doc table) that this issue builds on — confirm it actually landed before assuming it exists, (7) an issue cites a local import / implementation-detail finding whose target may already delegate to a shared helper or have moved the dependency to module scope."
 category: architecture
-date: 2026-06-26
-version: "1.4.0"
+date: 2026-06-30
+version: "1.5.0"
 user-invocable: false
-verification: verified-local
+verification: unverified
 history: audit-remediation-verify-evidence-before-planning.history
 tags: []
 ---
@@ -18,10 +18,10 @@ tags: []
 
 | Field | Value |
 | ------- | ------- |
-| **Date** | 2026-06-19 |
+| **Date** | 2026-06-30 |
 | **Objective** | Plan a fix for a cross-repo audit-remediation GitHub issue without trusting stale audit evidence |
 | **Outcome** | Discovered the audit was stale — target submodule already remediated; scoped the plan to only the genuinely-actionable owned-repo work + a drift guard |
-| **Verification** | verified-local |
+| **Verification** | unverified for the latest v1.5.0 addition; older evidence-check cases remain labeled inline |
 
 > **Verification note:** The evidence-verification steps below (grep against the live tree, confirming canonical names in the Pydantic source of truth) were genuinely RUN this session and confirmed the target docs were already remediated — that is what `verified-local` attests to. The downstream implementation (the architecture.md section + the drift-guard script wired into `just ci`) was **planned only**, not executed or CI-validated. Do not read this as `verified-ci`.
 >
@@ -30,6 +30,8 @@ tags: []
 > **v1.3.0 note (UNVERIFIED — plan only; inferred-version-anchor case):** Planning ProjectHephaestus issue #1506 (audit finding: three Stable subpackages — `hephaestus.cli`, `hephaestus.system`, `hephaestus.version` — lack per-symbol API tables in `COMPATIBILITY.md`). **No code was executed, no tests run, no CI** — this addition is `unverified`, NOT `verified-local` or `verified-ci`. The durable learning: when an audit asks you to author a doc table whose "Added" semantic-version column is genuinely UN-RECOVERABLE (the subpackages predate the existing tables; there is no authoritative record of which version first shipped each symbol), you must INFER those values — and label them honestly as "best-effort historical anchors" so the reviewer does not treat them as authoritative. Anchors were inferred by: reusing a version already documented for the symbol in a sibling table; `git log -S <symbol>` to find the introducing commit/PR and mapping its era to a minor; and defaulting pre-1.0 infrastructure to `0.1.0`. The accompanying drift-guard deliberately validates ONLY the recoverable invariant (table membership cross-checked against live `__all__`, both directions) and deliberately does NOT assert the inferred "Added" string — guarding an inferred field would lend false authority to fabricated data. Also: re-reading the live `__all__` caught the audit's symbol count as stale AND under-counted (issue claimed 12 for `hephaestus.cli`; live `__init__.py` had 16).
 >
 > **v1.4.0 note (UNVERIFIED — plan only; predecessor-artifact-never-landed case):** Planning ProjectHephaestus issue #1507 (audit finding: the `hephaestus.utils` and `hephaestus.config` per-symbol API tables in `COMPATIBILITY.md` are severely incomplete — the majority of `__all__` symbols are undocumented). **No code executed, no tests, no CI** — `unverified`. This is the DIRECT follow-on to #1506 and produced three durable lessons. (1) **A captured plan ≠ a merged change.** The v1.3.0 note above documented the #1506 plan to create `hephaestus/validation/api_table_docs.py`; this session a literal `test -f hephaestus/validation/api_table_docs.py` returned NO, and `COMPATIBILITY.md` still had only logging/config/io/utils tables (no cli/system/version tables) — the #1506 guard NEVER LANDED. So #1507 is the FIRST issue to actually create `api_table_docs.py`. LESSON: re-verify the artifact exists on disk before assuming a predecessor issue's work is done. (2) **Re-derive the count per issue — the result varies.** Unlike #1506 (whose count was stale/under-counted), the #1507 audit's counts were ACCURATE: live `hephaestus.utils.__all__`=14 (the table listed only 5), `hephaestus.config.__all__`=13 (table listed only 5), confirmed via `python3 -c "import hephaestus.utils as m; print(len(m.__all__)); print(sorted(m.__all__))"`. Always re-derive; do NOT assume "stale" or "accurate" from a sibling issue. (3) **A deprecated `__all__` member still needs a table ROW.** `retry_with_jitter` appeared in `COMPATIBILITY.md:193` deprecation PROSE but was absent from the utils membership table; a completed table must give it a row flagged deprecated (matching the existing `get_config_value` precedent at `COMPATIBILITY.md:210`). The membership guard counts a symbol present-or-missing regardless of deprecation status.
+>
+> **v1.5.0 note (UNVERIFIED — plan only; call-time-local-import case):** Planning ProjectHephaestus issue #1460 (verify `CIDriver._parse_json_block` no longer has a call-time `import re`). **Issue #1460 was not re-fetched from GitHub, no CI/check status was verified, no target PR branch or branch-protection state was verified, and no remediation was executed** — this addition is `unverified`. The plan assumed local inspection showed `CIDriver._parse_json_block` already delegates to `parse_json_block`, while regex support lives at module scope in `hephaestus/automation/_review_utils.py`. Durable lesson: a stale issue line number or local branch mismatch can turn an implementation task into an evidence task. Before approving a no-op remediation, the reviewer must confirm the branch under review matches the local evidence, an AST or equivalent source check shows zero local imports inside `CIDriver._parse_json_block`, delegation preserves raw-JSON fallback and `use_last_block` semantics, and no style-only tests or duplicated regex logic were added just to create a diff.
 >
 > **v1.2.0 note (single-repo, multi-target frontmatter case):** Planning ProjectHephaestus issue #1553 ("Skills missing `argument-hint` frontmatter field"), which named TWO targets — `skills/brainstorm/SKILL.md` and `skills/python-repo-modernization/SKILL.md`. Reading `skills/brainstorm/SKILL.md:1-6` showed `argument-hint: <idea or feature description>` **already present at line 4** — the audit snapshot (2026-06-16) was stale for that target; only `python-repo-modernization` genuinely lacked the field. Re-reading every cited file:line before planning (not trusting the issue text) is what `verified-local` attests to here; the PR/CI for #1553 had **not landed at capture time** — state honestly, this is `verified-local`, not `verified-ci`. A repo-wide `awk` survey over all `skills/*/SKILL.md` both confirmed `brainstorm` was already compliant AND surfaced ~10 OTHER skills missing the field — deliberately EXCLUDED to respect one-issue-per-PR scope. The field is unenforced: `grep -rl "argument-hint" tests/` returned nothing and `ls tests/unit/ | grep -i skill` was empty, so verification is a YAML-frontmatter parse (`yaml.safe_load_all`), NOT a unit test — do not invent a test where no contract exists.
 
@@ -46,6 +48,8 @@ tags: []
 - The audit cites a symbol/item COUNT (e.g. "`__all__` has 12 symbols"). Counts go stale and are frequently under-counted — re-derive the FULL set from the live source, never transcribe the audit's enumeration. (Note: a count can also be ACCURATE — #1507's utils=14/config=13 were exact; never inherit "stale" or "accurate" from a sibling issue, re-derive each time.)
 - A prior/predecessor issue (or a skill that captured its plan) claims to have introduced an artifact this issue builds on — a drift-guard script, a doc table, a console script. A captured plan is NOT a merged change: `test -f <path>` / re-read the doc to confirm the artifact actually landed before assuming it exists.
 - You are completing a MEMBERSHIP table (every `__all__` symbol gets a row) and some members are deprecated. A deprecated symbol can live in PROSE but be absent from the table — it still needs a table row (flagged deprecated). Membership is independent of deprecation status.
+- The issue targets an implementation-detail cleanup (for example, "remove a local import from method X") where the live tree may already have the desired shape; verify the exact branch, method body, helper delegation, and acceptance criterion before planning source edits.
+- The reviewer risk is about import placement or shared-parser semantics rather than user-visible behavior; an AST/import-placement check may be the right evidence, while new behavioral tests may be redundant or style-only.
 
 **Related:** `agent-config-validation-and-integrity` covers HOW to validate YAML frontmatter structurally (`yaml.safe_load_all`, required fields). This skill is distinct: it is about VERIFYING AUDIT FINDINGS before planning — re-reading every cited target on disk, detecting stale/partially-fixed multi-target audits, and resisting scope creep. Reach for that skill once you know what to validate; reach for this one to decide whether the audit's claim is even still true.
 
@@ -125,6 +129,53 @@ python3 -c "import hephaestus.config as m; print(len(m.__all__)); print(sorted(m
 grep -n 'retry_with_jitter\|get_config_value' COMPATIBILITY.md   # in prose at :193/:210 but check the table too
 ```
 
+## Proposed Workflow
+
+> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms.
+
+### Quick Reference (v1.5.0 call-time-local-import audit)
+
+```bash
+# 1. Re-fetch or re-read the issue before trusting line numbers or acceptance criteria.
+gh issue view 1460 --repo HomericIntelligence/ProjectHephaestus --json body,state,updatedAt
+
+# 2. Confirm the branch under review and the local tree are the same evidence surface.
+git rev-parse --abbrev-ref HEAD
+git status --short
+git log --oneline -1
+
+# 3. Inspect the method body and delegation.
+grep -n 'def _parse_json_block' -A40 hephaestus/automation/ci_driver.py
+grep -n 'def parse_json_block\|import re\|_JSON' hephaestus/automation/_review_utils.py
+
+# 4. Prefer an AST/import-placement check for the actual acceptance criterion.
+python3 - <<'PY'
+import ast
+from pathlib import Path
+
+tree = ast.parse(Path("hephaestus/automation/ci_driver.py").read_text())
+for node in ast.walk(tree):
+    if isinstance(node, ast.FunctionDef) and node.name == "_parse_json_block":
+        offenders = [n.lineno for n in ast.walk(node) if isinstance(n, (ast.Import, ast.ImportFrom))]
+        print(offenders)
+        raise SystemExit(1 if offenders else 0)
+raise SystemExit("CIDriver._parse_json_block not found")
+PY
+
+# 5. Run existing parser tests only if source edits are needed or delegation semantics are in doubt.
+python3 -m pytest \
+  tests/unit/automation/test_ci_driver.py::TestParseJsonBlock \
+  tests/unit/automation/test_review_utils.py::TestParseJsonBlock
+```
+
+### Detailed Steps (v1.5.0)
+
+1. **Re-anchor the issue citation before planning edits.** A line number in issue #1460 may be stale. Re-read the issue body and the live file, then state whether the cited method still contains the alleged call-time `import re`.
+2. **Confirm the evidence branch.** The automation/reviewer branch can differ from the local checkout. A no-op plan is only valid if the branch under review has the same `ci_driver.py` and `_review_utils.py` shape as the local evidence.
+3. **Test the actual acceptance criterion directly.** For "no local import inside `CIDriver._parse_json_block`", use AST/source inspection that detects `ast.Import` and `ast.ImportFrom` nodes inside that method. This is stronger than adding a behavioral parser test that would pass even with the import in place.
+4. **Preserve parser semantics if any edit is needed.** The shared `parse_json_block` helper must keep raw JSON fallback behavior and `use_last_block` behavior. Do not reintroduce duplicated regex logic into `ci_driver.py` to make a visible diff.
+5. **Separate no-op remediation from no-evidence remediation.** If the live branch already delegates to `parse_json_block` and has module-level regex support in `_review_utils.py`, the deliverable is verification evidence and reviewer risk notes. If no file change belongs, do not create style-only tests just to satisfy a "changed files" expectation.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -147,6 +198,9 @@ grep -n 'retry_with_jitter\|get_config_value' COMPATIBILITY.md   # in prose at :
 | Assumed #1506's `api_table_docs.py` guard had shipped because a skill captured its plan (v1.4.0, UNVERIFIED) | Took the v1.3.0 skill note documenting the #1506 plan as evidence the guard + cli/system/version tables already existed | `test -f hephaestus/validation/api_table_docs.py` returned NO and `COMPATIBILITY.md` still had only logging/config/io/utils tables — the #1506 plan never landed; #1507 is the FIRST issue to create the guard | A captured plan ≠ a merged change — re-verify the artifact on disk (`test -f`) before assuming a predecessor issue's work is done |
 | Assuming the #1507 audit count was stale like #1506's (v1.4.0, UNVERIFIED) | Nearly carried over the "audit count is under-counted" finding from #1506 | The #1507 counts were ACCURATE: live `hephaestus.utils.__all__`=14 (table listed 5), `hephaestus.config.__all__`=13 (table listed 5) | Re-derive the count from live `__all__` EVERY issue — the result varies per issue; never inherit "stale" or "accurate" from a sibling |
 | Skipping a deprecated symbol when completing the membership table (v1.4.0, UNVERIFIED) | `retry_with_jitter` was documented in `COMPATIBILITY.md:193` deprecation PROSE, so almost left it out of the utils table | It is still a member of `hephaestus.utils.__all__`; a membership table that omits it would fail the bidirectional guard (`missing-from-docs`) | A deprecated `__all__` member still needs a table ROW (flagged deprecated, per the `get_config_value` precedent at `COMPATIBILITY.md:210`); membership is independent of deprecation status |
+| Trusting the issue citation without re-fetching it (v1.5.0, UNVERIFIED) | Planned around ProjectHephaestus #1460's cited `CIDriver._parse_json_block` line number from local context only | The issue text was not re-fetched and line numbers may drift; a stale citation can make the plan target the wrong branch or already-fixed code | Re-fetch/re-read the issue and re-anchor the method in the branch under review before approving a no-op remediation |
+| Treating parser behavior tests as proof of import placement (v1.5.0, UNVERIFIED) | Relied on existing `TestParseJsonBlock` behavior coverage to infer the local import was gone | Behavioral tests can pass while `import re` still sits inside the method; the acceptance criterion is structural | Add or run an AST/source check for imports inside the exact method when the audit finding is about import placement |
+| Creating style-only tests to force a diff (v1.5.0, UNVERIFIED) | Considered changing tests even if the implementation already delegates to the shared parser | Tests that do not protect the issue's actual acceptance criterion create churn and can mask that no source edit was needed | If the live branch already satisfies the issue, provide verification evidence; do not add redundant tests or duplicated regex logic just to create a PR diff |
 
 ## Results & Parameters
 
@@ -180,3 +234,9 @@ grep -n 'retry_with_jitter\|get_config_value' COMPATIBILITY.md   # in prose at :
   - Deprecated-member-still-needs-a-row: `retry_with_jitter` was in `COMPATIBILITY.md:193` deprecation PROSE but absent from the utils table; it is still in `__all__`, so the completed table needs a row flagged deprecated, matching the `get_config_value` precedent at `COMPATIBILITY.md:210`. Membership is independent of deprecation status.
   - "Added" anchors (best-effort, NOT facts; via `git log -S <symbol> --reverse -- hephaestus/`): `get_repo_root` from an early src-merge commit; `validate_config` from the initial impl commit `50c5eca4`; `parse_pixi_toml`/`dep_sync` family from `056462a0` (config port). Pre-1.0 infra with no clearer anchor -> `0.1.0`. The guard does NOT assert these.
   - The `api_table_docs.py` guard validates ONLY membership (both directions: `missing-from-docs` + `missing-from-all`), mirrors `cli_tier_docs.py` exactly, and trips the sibling `cli_tier_docs` guard via the new console script `hephaestus-check-api-table-docs` unless a reciprocal `| hephaestus-check-api-table-docs | Internal | ... |` Console-Script Stability Tiers row is added.
+- **ProjectHephaestus #1460 (`CIDriver._parse_json_block` call-time `import re`, v1.5.0 case — UNVERIFIED, plan only):**
+  - Objective: produce an implementation plan focused on verifying `CIDriver._parse_json_block` no longer has a call-time `import re`.
+  - Local evidence assumed by the plan: `hephaestus/automation/ci_driver.py` already delegates to `parse_json_block`; regex support is module-level in `hephaestus/automation/_review_utils.py`.
+  - External evidence NOT verified in the plan: issue #1460 text was not re-fetched from GitHub; no CI/check status was verified; no target PR branch or branch-protection state was verified; the target branch used by automation/reviewer may differ from the local tree.
+  - Most uncertain assumptions: the cited issue line number may be stale; the live tree may already have the desired implementation; acceptance may care about import placement rather than parser behavior; no source edits may be needed.
+  - Reviewer risk focus: confirm the reviewed branch matches the local evidence; AST/source check proves zero `ast.Import`/`ast.ImportFrom` nodes inside `CIDriver._parse_json_block`; delegation preserves raw JSON fallback and `use_last_block`; `_review_utils.py` module-level regex remains lint-clean; do not add style-only tests or reintroduce duplicated regex logic.
