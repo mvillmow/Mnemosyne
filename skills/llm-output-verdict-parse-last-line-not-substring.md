@@ -1,11 +1,11 @@
 ---
 name: llm-output-verdict-parse-last-line-not-substring
-description: "Parse discrete LLM-emitted verdicts (APPROVED/REVISE/BLOCK, GO/NOGO, SAFE/UNSAFE) using last-line regex extraction, not substring `in` checks. Use when: (1) adding a Python/shell consumer that reads a classification marker from LLM output, (2) the prompt instructs the LLM that 'readers take the LAST matching line', (3) the LLM may discuss multiple options before settling on a verdict, (4) a substring-in check would fire on quoted/discussed markers, (5) auditing an existing parser for false-positive verdict reads, (6) a reviewer comment exists but its verdict is never parsed — causing the pipeline to re-review the same issue every pass forever (#615 infinite loop), (7) diagnosing a re-review loop where the log gives no clue what the reviewer wrote, (8) deciding whether a verdict parser should be first-match or last-match — persisted/accumulating comment gates need last-match-wins, single-line fresh-output parsers can use first-match, (9) auditing a 'parser unification' refactor that may have silently dropped a last-wins safety guarantee."
+description: "Parse discrete LLM-emitted verdicts (APPROVED/REVISE/BLOCK, GO/NOGO, SAFE/UNSAFE) using last-line regex extraction, not substring `in` checks. Use when: (1) adding a Python/shell consumer that reads a classification marker from LLM output, (2) the prompt instructs the LLM that 'readers take the LAST matching line', (3) the LLM may discuss multiple options before settling on a verdict, (4) a substring-in check would fire on quoted/discussed markers, (5) auditing an existing parser for false-positive verdict reads, (6) a reviewer comment exists but its verdict is never parsed — causing the pipeline to re-review the same issue every pass forever (#615 infinite loop), (7) diagnosing a re-review loop where the log gives no clue what the reviewer wrote, (8) deciding whether a verdict parser should be first-match or last-match — persisted/accumulating comment gates need last-match-wins, single-line fresh-output parsers can use first-match, (9) auditing a 'parser unification' refactor that may have silently dropped a last-wins safety guarantee, (10) reviewing a plan to add property-based fuzz tests for LLM-output parsers, (11) checking whether parser semantics, dependency manifests, and cited file coordinates were verified before test contracts were frozen."
 category: architecture
-date: 2026-05-28
-version: "1.2.0"
+date: 2026-06-30
+version: "1.3.0"
 user-invocable: false
-verification: verified-ci
+verification: verified-local
 history: llm-output-verdict-parse-last-line-not-substring.history
 tags:
   - llm-output-parsing
@@ -22,6 +22,10 @@ tags:
   - first-match-vs-last-match
   - parser-unification-regression
   - input-contract
+  - property-testing
+  - hypothesis
+  - planning-review
+  - dependency-surface
 ---
 
 # LLM Output Verdict Parse: Last-Line Regex, Not Substring
@@ -30,10 +34,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-05-28 |
-| **Objective** | Prevent false-positive verdict reads when a Python/shell consumer parses a discrete classification marker (`**Verdict: APPROVED**` etc.) from LLM output. Also prevent the complementary infinite-re-review loop when the verdict is malformed and never parseable, and the inverse regression where a persisted-comment gate's last-wins guarantee is silently dropped by collapsing it onto a first-match parser. |
-| **Outcome** | SUCCESS — regex fix shipped in PR #552; bounded-retry cap + WARNING diagnostic logging shipped in PR #670 (Issues #615/#616); two-parser distinction (gate last-match vs in-loop first-match) preserved during the GO/NOGO vocabulary unification in PR #679 (issue #678). 53-pass infinite loop for issues #455/#468/#484 eliminated. |
-| **Verification** | verified-ci — PR #670 passed all pre-commit hooks and CI. (v1.2.0 two-parser content: verified-local — 845 automation tests + mypy + pre-commit green; PR #679 CI in flight.) |
+| **Date** | 2026-06-30 |
+| **Objective** | Prevent false-positive verdict reads when a Python/shell consumer parses a discrete classification marker (`**Verdict: APPROVED**` etc.) from LLM output. Also prevent the complementary infinite-re-review loop when the verdict is malformed and never parseable, the inverse regression where a persisted-comment gate's last-wins guarantee is silently dropped by collapsing it onto a first-match parser, and property-based tests that freeze unverified parser assumptions. |
+| **Outcome** | SUCCESS — regex fix shipped in PR #552; bounded-retry cap + WARNING diagnostic logging shipped in PR #670 (Issues #615/#616); two-parser distinction (gate last-match vs in-loop first-match) preserved during the GO/NOGO vocabulary unification in PR #679 (issue #678). Planning-review guidance now covers Hypothesis fuzz-test plans for LLM parsers where current semantics and dependency surfaces must be verified before approval. |
+| **Verification** | verified-local — v1.3.0 amendment validated with `python3 scripts/validate_plugins.py`; earlier implementation evidence remains PR #670 CI and v1.2.0 local parser-suite evidence. |
 | **History** | [changelog](./llm-output-verdict-parse-last-line-not-substring.history) |
 
 ## When to Use
@@ -47,6 +51,8 @@ tags:
 - **The pipeline log gives no clue what the reviewer wrote** — only says "verdict is None" or "not APPROVED" at DEBUG level.
 - **You must decide whether a verdict parser should be first-match or last-match.** Persisted / accumulating comment gates (long-lived GitHub comments that may collect an earlier draft verdict before the final one) need last-match-wins; single-line fresh-output parsers whose prompt contract guarantees exactly one verdict line can use first-match.
 - **You are auditing a "parser unification" refactor** (e.g. unifying verdict vocabulary to GO/NOGO) that may have silently collapsed a persisted-comment gate onto a first-match parser, dropping its last-wins safety guarantee.
+- **You are reviewing a plan to add Hypothesis/property-based coverage for LLM-output string parsers.** Verify the parser contracts first; do not let generated tests freeze semantics that were merely inferred from current implementation.
+- **The plan cites local file paths, line numbers, package names, or dependency surfaces without live verification.** Re-check current files and manifests before approving a test-hardening plan.
 
 ## Verified Workflow
 
@@ -161,6 +167,38 @@ inline-prose false positives are handled by line-anchoring **regardless** of fir
 choice. The first-vs-last decision is purely about which of *several legitimately-anchored*
 verdict lines wins.
 
+### Planning Property-Based Parser Tests
+
+When reviewing a plan that adds Hypothesis or other property-based tests for LLM-output
+parsers, separate **observed implementation behavior** from **intended contract** before
+approving. Generated tests are high-leverage regression guards, but they can also lock in
+accidental behavior if the plan treats unverified current code as the specification.
+
+Use this reviewer checklist before implementation:
+
+1. **Verify parser semantics against current code and issue intent.** For ProjectHephaestus
+   issue #1470, the uncertain assumptions were: `parse_review_verdict()` intentionally uses
+   first-match semantics, `latest_verdict()` intentionally uses last-match semantics,
+   `_parse_coordinator_results()` intentionally extracts every fenced JSON block while
+   skipping malformed fenced JSON, and `_parse_addressed_block()` intentionally inherits
+   last-fenced-block/default behavior through `parse_json_block()`. Confirm these are still
+   true and desired before approving tests that assert them.
+2. **Re-check every cited source of truth live.** Plans may cite remembered or previously
+   inspected file paths, line numbers, package names, PyPI names, or APIs. Treat those as
+   pointers, not evidence. Re-open the current files and manifests before review sign-off.
+3. **Bound generated inputs for CI.** `st.text()` and arbitrary Unicode can expose real bugs,
+   but unbounded strategies can also create slow, flaky, or hard-to-reproduce CI failures.
+   Keep `max_size`, example counts, and deadlines explicit, and blacklist surrogate code
+   points when the parser is not meant to handle them.
+4. **Update every active dependency surface.** Adding Hypothesis to one manifest is not
+   enough when the repo supports multiple install paths. Check `pyproject.toml`, Pixi or
+   lockfile-managed dev environments, and generated lockfiles together.
+5. **Prefer stable contracts over private implementation shape.** It is acceptable to test
+   private parser helpers when they are the only stable seam for LLM-output contracts, but
+   assertions should describe externally meaningful behavior: never raises on malformed
+   model text, line anchoring, first-vs-last match semantics, JSON block selection, and safe
+   defaults.
+
 ### Detailed Steps
 
 1. **Read the prompt template used to generate the LLM output.** Find the explicit "format" instruction. Example from `hephaestus/automation/prompts.py:474-475`: *"End your response with exactly one of the following verdict lines … readers take only the LAST matching line."*
@@ -201,6 +239,16 @@ verdict lines wins.
 
 6. **Co-locate the prompt and the parser** in a single review. The defect shipped because the prompt lived in `prompts.py` and the parser in `plan_reviewer.py`, touched in separate PRs.
 
+7. **For property-based parser coverage, first classify each assertion as documented contract,
+   issue intent, or current implementation.** Only documented contract and confirmed issue
+   intent should become hard properties. If current implementation behavior is desirable but
+   undocumented, update the plan to verify or document it before freezing it in fuzz tests.
+
+8. **For dependency additions, review every supported installation path.** In a Python repo
+   with both `.[dev]` and Pixi workflows, the implementation should update the optional dev
+   dependency group, Pixi dev dependency section, and lockfile via the resolver rather than
+   hand-editing generated files.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -213,6 +261,10 @@ verdict lines wins.
 | 6 | No retry cap on malformed verdicts | Loop called re-review every pass when verdict was None | Same issues re-reviewed 12× across loops 2–5 (#455/#468/#484). Add `count_unparseable_verdict_passes()` + `exceeds_unparseable_verdict_cap()` with cap=3. |
 | 7 | Loosen the strict regex to catch more variants | Considered removing `^...$` anchoring to tolerate whitespace/markdown decorators | Strict anchoring is intentional — it prevents the false-positive substring matches that caused #551/#552. NEVER loosen VERDICT_LINE_RE; fix the LLM prompt output instead. |
 | 8 | Unify the persisted-comment gate onto the in-loop first-match parser during a vocabulary refactor (GO/NOGO unification, PR #679) | First-match silently broke last-wins → a `Verdict: GO … on reflection … Verdict: NOGO` review (reviewer changed its mind to REJECT) parsed as GO, would implement a rejected plan. Caught only by two failing regression tests (`test_false_when_go_precedes_nogo_in_same_body`, `test_true_when_nogo_precedes_go_in_same_body`) whose docstrings guard the last-wins contract. | Match semantics follow the INPUT contract — "exactly one line" (fresh output) vs "may accumulate lines" (persisted state); keep two parsers, do NOT collapse them. |
+| 9 | Treat current parser code as the full specification while planning property tests | The plan can freeze accidental behavior if first-match, last-match, JSON-block extraction, or default-on-failure semantics were inferred rather than documented or issue-approved | Before generated tests assert a behavior, verify the code, prompt contract, and issue intent all agree; otherwise mark it as an open review question. |
+| 10 | Use broad arbitrary string strategies without tight bounds | Hypothesis may generate very large or awkward Unicode inputs, making CI slow, flaky, or difficult to reproduce | Keep `max_size`, `max_examples`, and `deadline` explicit; avoid surrogate code points unless the parser is expected to handle them. |
+| 11 | Add Hypothesis to only one dependency manifest | `pixi run pytest` and `.[dev]` installs can diverge, and CI may fail even if local editable installs work | Update every active dev/test dependency surface and regenerate lockfiles with the repository's resolver. |
+| 12 | Assert private helper internals too tightly | Tests become brittle to harmless parser refactors and discourage cleanup | Test stable LLM-output contracts: safe defaults, no exceptions on malformed text, line anchoring, match selection semantics, and JSON block selection. |
 
 ## Results & Parameters
 
@@ -245,6 +297,17 @@ _GATE_VERDICT_RE = re.compile(
 )
 # Gate (persisted comment, may accumulate lines): findall(...)[-1]  → last-match-wins
 # In-loop (fresh single-line reply, prompt guarantees one line): .search() → first-match
+```
+
+**Planning-review checklist for property-based LLM-parser tests:**
+
+```text
+Before approving a Hypothesis parser-test plan:
+- Re-open the current parser files; do not trust stale line numbers.
+- Confirm first-match vs last-match semantics against prompt/issue intent.
+- Confirm JSON-block selection semantics are intended, not incidental.
+- Check every install path that must receive the new test dependency.
+- Require bounded strategies so CI remains deterministic enough to debug.
 ```
 
 **Cross-language equivalents:**
@@ -284,3 +347,4 @@ _GATE_VERDICT_RE = re.compile(
 | ProjectHephaestus | `hephaestus/automation/plan_reviewer.py:342` | Originating defect — `_FINAL_VERDICT_MARKER in latest_review_body`. Fixed in #552. |
 | ProjectHephaestus | Issue #552 (epic #550) | Originating issue under the 1.0 audit remediation epic. |
 | ProjectHephaestus | Issue #678 / PR #679 | GO/NOGO verdict unification — preserved the two-parser distinction (`_GATE_VERDICT_RE` last-match gate vs `parse_review_verdict` first-match in-loop). Regression where the gate was collapsed onto first-match caught by `test_false_when_go_precedes_nogo_in_same_body` / `test_true_when_nogo_precedes_go_in_same_body`. Verified-local: 845 automation tests + mypy + pre-commit green; CI in flight. |
+| ProjectHephaestus | Issue #1470 implementation-plan review | Planning guidance for Hypothesis property tests over `parse_review_verdict()`, `latest_verdict()`, `_parse_coordinator_results()`, and `_parse_addressed_block()`. Verified-local for the skill update only; parser implementation not re-verified during learning capture. |

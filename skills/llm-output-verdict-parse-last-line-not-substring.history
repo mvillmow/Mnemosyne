@@ -1,5 +1,113 @@
 # llm-output-verdict-parse-last-line-not-substring — History
 
+## v1.3.0 (2026-06-30)
+
+**Changed by:** ProjectHephaestus issue #1470 implementation-plan learning capture
+**Verification:** verified-local — `python3 scripts/validate_plugins.py` passed locally for the ProjectMnemosyne skill catalog
+
+### What changed
+
+- Added planning-review triggers for Hypothesis/property-based tests over LLM-output parsers.
+- Added guidance that parser semantics must be verified against current code, prompt contracts, and issue intent before property tests assert them.
+- Added reviewer checks for stale file/line references, unverified package names, dependency-surface drift, bounded string strategies, and private-helper brittleness.
+- Added 4 new Failed Attempts rows covering accidental contract freezing, unbounded generated strings, one-manifest dependency additions, and overfitting tests to private parser internals.
+- Updated `Verified On` with ProjectHephaestus issue #1470 planning context.
+- Bumped `version` 1.2.0 → 1.3.0 (MINOR — new planning-review findings and failed attempts).
+
+### Why
+
+The issue #1470 implementation plan proposed property-based Hypothesis tests for several
+LLM-output parsers. The riskiest part of that plan was not the mechanics of writing tests;
+it was that the proposed properties treated current parser behavior as intentional without
+live verification in the plan context. First-match semantics for `parse_review_verdict()`,
+last-match semantics for `latest_verdict()`, all-fenced-block extraction for
+`_parse_coordinator_results()`, and last-fenced-block/default behavior for
+`_parse_addressed_block()` may all be correct, but a reviewer should confirm that current
+code and issue intent agree before generated tests freeze those behaviors. The plan also
+relied on local file/line references and the PyPI package name for Hypothesis without live
+verification, and adding Hypothesis affects every active dev/test dependency surface, not
+only one manifest.
+
+### Previous version (v1.2.0) snapshot
+
+```markdown
+---
+name: llm-output-verdict-parse-last-line-not-substring
+description: "Parse discrete LLM-emitted verdicts (APPROVED/REVISE/BLOCK, GO/NOGO, SAFE/UNSAFE) using last-line regex extraction, not substring `in` checks. Use when: (1) adding a Python/shell consumer that reads a classification marker from LLM output, (2) the prompt instructs the LLM that 'readers take the LAST matching line', (3) the LLM may discuss multiple options before settling on a verdict, (4) a substring-in check would fire on quoted/discussed markers, (5) auditing an existing parser for false-positive verdict reads, (6) a reviewer comment exists but its verdict is never parsed — causing the pipeline to re-review the same issue every pass forever (#615 infinite loop), (7) diagnosing a re-review loop where the log gives no clue what the reviewer wrote, (8) deciding whether a verdict parser should be first-match or last-match — persisted/accumulating comment gates need last-match-wins, single-line fresh-output parsers can use first-match, (9) auditing a 'parser unification' refactor that may have silently dropped a last-wins safety guarantee."
+category: architecture
+date: 2026-05-28
+version: "1.2.0"
+user-invocable: false
+verification: verified-ci
+history: llm-output-verdict-parse-last-line-not-substring.history
+tags:
+  - llm-output-parsing
+  - verdict-gate
+  - regex
+  - last-line-wins
+  - claude-output
+  - prompt-parser-contract
+  - false-positive
+  - substring-vs-regex
+  - bounded-retry
+  - infinite-loop
+  - observability
+  - first-match-vs-last-match
+  - parser-unification-regression
+  - input-contract
+---
+
+# LLM Output Verdict Parse: Last-Line Regex, Not Substring
+
+## Overview
+
+| Field | Value |
+|-------|-------|
+| **Date** | 2026-05-28 |
+| **Objective** | Prevent false-positive verdict reads when a Python/shell consumer parses a discrete classification marker (`**Verdict: APPROVED**` etc.) from LLM output. Also prevent the complementary infinite-re-review loop when the verdict is malformed and never parseable, and the inverse regression where a persisted-comment gate's last-wins guarantee is silently dropped by collapsing it onto a first-match parser. |
+| **Outcome** | SUCCESS — regex fix shipped in PR #552; bounded-retry cap + WARNING diagnostic logging shipped in PR #670 (Issues #615/#616); two-parser distinction (gate last-match vs in-loop first-match) preserved during the GO/NOGO vocabulary unification in PR #679 (issue #678). 53-pass infinite loop for issues #455/#468/#484 eliminated. |
+| **Verification** | verified-ci — PR #670 passed all pre-commit hooks and CI. (v1.2.0 two-parser content: verified-local — 845 automation tests + mypy + pre-commit green; PR #679 CI in flight.) |
+| **History** | [changelog](./llm-output-verdict-parse-last-line-not-substring.history) |
+
+## When to Use
+
+- You are adding a Python or shell consumer that reads a classification marker (verdict, severity, action, command) from LLM output.
+- The prompt that generated the output explicitly says "readers take only the LAST matching line" (or equivalent).
+- The LLM is permitted to discuss multiple options before settling — multiple matching markers may legitimately appear.
+- A substring `in` check would fire on a quoted/discussed marker.
+- You are auditing an existing parser (skip-gate, finalize-gate, ship-gate) for false-positive reads.
+- **A plan-review loop re-reviews the same issue every pass without ever terminating** — symptom of a malformed verdict that regex cannot parse.
+- **The pipeline log gives no clue what the reviewer wrote** — only says "verdict is None" or "not APPROVED" at DEBUG level.
+- **You must decide whether a verdict parser should be first-match or last-match.** Persisted / accumulating comment gates (long-lived GitHub comments that may collect an earlier draft verdict before the final one) need last-match-wins; single-line fresh-output parsers whose prompt contract guarantees exactly one verdict line can use first-match.
+- **You are auditing a "parser unification" refactor** (e.g. unifying verdict vocabulary to GO/NOGO) that may have silently collapsed a persisted-comment gate onto a first-match parser, dropping its last-wins safety guarantee.
+
+## Verified Workflow
+
+The v1.2.0 workflow documented anchored verdict regex parsing, bounded retry for malformed
+verdict loops, and the two-parser distinction: persisted-comment gates use
+`findall(...)[-1]` while fresh in-loop parsers may use `.search()` only when their input
+contract guarantees exactly one verdict line.
+
+## Failed Attempts
+
+The v1.2.0 failed-attempt table covered substring verdict checks, brittle last-line checks,
+unanchored regex, DEBUG-only malformed-verdict logging, missing retry caps, loosening strict
+regexes, and unifying a persisted-comment gate onto an in-loop first-match parser.
+
+## Results & Parameters
+
+The v1.2.0 parameters included the anchored verdict regex, `MAX_UNPARSEABLE_VERDICT_PASSES = 3`,
+the GO/NOGO gate regex, cross-language equivalents, and minimum regression cases for
+single-match, multi-match, inline marker, malformed body, retry cap, and first-vs-last behavior.
+
+## Verified On
+
+The v1.2.0 evidence covered ProjectHephaestus PR #670, issue #678 / PR #679, and related
+parser/prompt files.
+```
+
+---
+
 ## v1.2.0 (2026-05-28)
 
 **Changed by:** ProjectHephaestus GO/NOGO verdict unification (PR #679 / issue #678)
