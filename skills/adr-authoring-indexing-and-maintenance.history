@@ -1,6 +1,41 @@
 <!-- markdownlint-disable MD024 -->
 # adr-authoring-indexing-and-maintenance — History
 
+## v1.5.0 (2026-07-07)
+
+**Changed by:** ProjectHephaestus issue #1929 — refresh stale prompt-function line
+references in `docs/AUTOMATION_LOOP_ARCHITECTURE.md` and add a focused docs regression
+test pattern using `inspect.getsourcelines(...)`.
+
+**Verification:** unverified for the ProjectHephaestus implementation pattern. This
+Mnemosyne amendment documents the workflow only; ProjectHephaestus tests were not run
+as part of this `/learn` execution.
+
+**What changed (minor bump 1.4.0 → 1.5.0 — additive, core workflow unchanged):**
+
+- Extended the skill description with a prompt-reference line-drift trigger for
+  architecture docs that already use `file.py:line function_name` prompt references.
+- Added section J, "Prompt-function line references in architecture docs", with the
+  proposed RED/GREEN order: add the focused docs test first, derive current source lines
+  from live definitions, update every documented occurrence, then run the docs guard and
+  prompt safety tests.
+- Added a representative `inspect.getsourcelines(...)` pytest pattern for asserting
+  every documented occurrence of seven issue-owned ProjectHephaestus prompt functions.
+- Added a failed-attempt row for trusting issue-body prompt line numbers instead of
+  resolving live definitions with `rg -n "def (...)" hephaestus`.
+- Added issue #1929 prompt-line reference parameters and a verified-on row marked
+  unverified.
+- Bumped `version:` 1.4.0 → 1.5.0; `date:` → 2026-07-07; added tags
+  `line-number-drift` and `prompt-reference-guard`.
+
+**Why:** ProjectHephaestus issue #1929 showed that architecture-stage tables can carry
+many line-numbered prompt references, and issue-body coordinates can be stale by the time
+implementation starts. The reusable pattern is to preserve the existing documentation
+style for consistency, but add a narrow source-derived regression test so future prompt
+function movement fails loudly instead of silently rotting the doc.
+
+**Prior version:** v1.4.0 (2026-07-04). This history file retains all prior version entries.
+
 ## v1.4.0 (2026-07-04)
 
 **Changed by:** ProjectHephaestus issue #1810 — ADR-0006 queue-based in-process

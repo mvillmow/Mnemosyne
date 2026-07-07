@@ -1,9 +1,10 @@
 ---
 name: adr-authoring-indexing-and-maintenance
-description: "Use when: (1) generating a new Architecture Decision Record (ADR) to document a significant architectural decision; (2) an ADR file exists but is not listed in the index table (docs/adr/README.md); (3) updating ADR status to Accepted (Deferred) when implementation is bypassed pending platform support; (4) two or more functions have nearly identical limitation comments and need consolidating into a single ADR with cross-references replacing duplicates; (5) updating ADR directory tree listings to reflect actual filesystem contents after file deletions or additions; (6) writing an ADR on an epic branch where some child PRs have not yet merged to main — use pending-tense language for open PRs, past-tense only for work already on main; (7) writing an ADR that references decisions from other repos or external docs — verify every ADR number on disk before asserting it exists, use commit SHAs for cross-repo work, cite file:line for cross-repo CLAUDE.md claims; (8) writing an ADR whose Decision section names a code artifact — verify it is git-tracked before citing it as canonical; (9) adding a structural guard test that keeps the ADR index enumerable and in sync with on-disk files; (10) creating a pre-implementation architecture skeleton for a multi-stage system — use full identifier names (not abbreviations) in ROUTES tables, complete line-range citations for code anchors, consistent file:line paths for all prompt-builder references, and structure the doc with status banner, topology, contract, per-stage docs, ROUTES table, seeding/reconstruction, and 'finalized-in-cutover' markers."
+description: "Use when: (1) generating a new Architecture Decision Record (ADR) to document a significant architectural decision; (2) an ADR file exists but is not listed in the index table (docs/adr/README.md); (3) updating ADR status to Accepted (Deferred) when implementation is bypassed pending platform support; (4) two or more functions have nearly identical limitation comments and need consolidating into a single ADR with cross-references replacing duplicates; (5) updating ADR directory tree listings to reflect actual filesystem contents after file deletions or additions; (6) writing an ADR on an epic branch where some child PRs have not yet merged to main — use pending-tense language for open PRs, past-tense only for work already on main; (7) writing an ADR that references decisions from other repos or external docs — verify every ADR number on disk before asserting it exists, use commit SHAs for cross-repo work, cite file:line for cross-repo CLAUDE.md claims; (8) writing an ADR whose Decision section names a code artifact — verify it is git-tracked before citing it as canonical; (9) adding a structural guard test that keeps the ADR index enumerable and in sync with on-disk files; (10) creating a pre-implementation architecture skeleton for a multi-stage system — use full identifier names (not abbreviations) in ROUTES tables, complete line-range citations for code anchors, consistent file:line paths for all prompt-builder references, and structure the doc with status banner, topology, contract, per-stage docs, ROUTES table, seeding/reconstruction, and 'finalized-in-cutover' markers; (11) refreshing line-numbered prompt references in architecture docs — derive live function definition lines from source and add a focused inspect.getsourcelines(...) regression test so documented file:line references cannot drift silently."
 category: documentation
-date: 2026-07-04
-version: "1.4.0"
+date: 2026-07-07
+version: "1.5.0"
+verification: unverified
 user-invocable: false
 history: adr-authoring-indexing-and-maintenance.history
 tags:
@@ -24,6 +25,8 @@ tags:
   - tracked-symbols
   - membership-guard
   - nygard-format
+  - line-number-drift
+  - prompt-reference-guard
 ---
 # ADR Authoring, Indexing, and Maintenance
 
@@ -41,7 +44,7 @@ directory-tree listings accurate against the real filesystem.
 | Objective | Author and maintain ADRs and their index, status, cross-references, and embedded directory trees |
 | Outcome | Consistent, traceable ADRs; index always reflects on-disk ADRs; status reflects code reality; no duplicate limitation comments |
 | Category | documentation |
-| Verification | verified-ci (core); v1.3.0 additions (section I) are verified-local, CI pending |
+| Verification | verified-ci (core); v1.3.0 additions (section I) are verified-local, CI pending; v1.5.0 prompt-line guard pattern is unverified |
 
 ## When to Use
 
@@ -51,6 +54,7 @@ directory-tree listings accurate against the real filesystem.
 - **Consolidation**: A GitHub issue says "consider a single shared ADR instead of cross-referencing between two function docstrings"; two or more functions contain nearly identical `# NOTE:`/`Note:` blocks describing the same limitation; an audit finds that updating a limitation note requires editing multiple files.
 - **Directory-tree accuracy**: A file is deleted/added in a PR but the ADR directory tree was not updated; a follow-up issue asks to verify a helpers/tests directory is accurately documented; `grep` finds an ADR tree listing fewer files than `ls` shows on disk.
 - **Cross-repo citation discipline**: Writing an ADR in a meta-repo (e.g., Odysseus) that references decisions from submodule repos or external docs; the ADR text asserts an ADR number from another repo; the ADR claims a CLAUDE.md or internal doc says something — all such claims must be verified on disk before the ADR is written since ADRs are append-only once Accepted.
+- **Prompt-reference line drift**: A ProjectHephaestus architecture or automation doc uses `file.py:line function_name` prompt references and an issue reports stale coordinates; keep the existing style, but pair the update with a focused `inspect.getsourcelines(...)` regression test.
 
 ## Verified Workflow
 
@@ -65,6 +69,7 @@ directory-tree listings accurate against the real filesystem.
 | Fix dir tree | Compare ADR ASCII tree vs `ls`; Edit to match real files using `├──`/`└──` connectors |
 | Lint | `pixi run pre-commit run markdownlint-cli2 --files docs/adr/<file>.md` (NOT `npx`/`just`) |
 | Cross-repo ADR ref | `ls docs/adr/` to verify number exists; cite commit SHA for cross-repo work; cite `<file>:<line>` for CLAUDE.md claims |
+| Prompt line refs | `rg -n "def (get_plan_prompt|get_implementation_prompt|...)" hephaestus`; add `tests/unit/docs/...` guard using `inspect.getsourcelines(...)` |
 | Land | conventional commit `docs(adr): ...`, push, `gh pr create --label documentation`, `gh pr merge --auto --rebase` |
 
 ### Detailed Steps
@@ -389,6 +394,96 @@ different — document the variant so future ADR work there matches the local co
 | Sections | Context / Decision / Rationale / Consequences / Alternatives Considered | `## Context` / `## Decision` / `## Alternatives considered` (lowercase 'c') / `## Consequences` |
 | Markdown gate | `pixi run pre-commit run markdownlint-cli2 --files <paths>` | `pre-commit run markdownlint-cli2 --files <paths>` (hook id `markdownlint-cli2`, NOT `markdownlint`) |
 
+#### J. Prompt-function line references in architecture docs (Proposed — unverified)
+
+> **Warning:** This workflow has not been validated end-to-end. Treat as a hypothesis until CI confirms.
+
+When a ProjectHephaestus architecture doc already uses `file.py:line function_name`
+references for prompt builders, keep that style rather than converting only the
+edited rows to path-only citations. The right durability improvement is a narrow
+docs regression test that compares every issue-owned documented occurrence against
+the live source definition line.
+
+1. Add the focused docs test first under `tests/unit/docs/` and run it once against
+   the stale doc to confirm it fails for the old coordinates.
+2. Re-derive current source definition lines from the live tree, not from an issue
+   body or older plan:
+
+   ```bash
+   rg -n "def (get_plan_prompt|get_plan_loop_review_prompt|get_implementation_prompt|get_dirty_reused_worktree_decision_prompt|get_impl_resume_feedback_prompt|force_engagement_prompt|build_ci_fix_prompt)" hephaestus
+   ```
+
+3. Update every documented occurrence of the owned prompt functions in
+   `docs/AUTOMATION_LOOP_ARCHITECTURE.md`, preserving the existing
+   `` `path.py:line function_name` `` style.
+4. Run the targeted docs guard:
+
+   ```bash
+   pixi run pytest tests/unit/docs/test_automation_loop_architecture.py -q
+   ```
+
+5. Run the prompt safety regression suite because the edited references point at
+   prompt builders:
+
+   ```bash
+   pixi run pytest tests/unit/automation/test_prompts.py -q
+   ```
+
+Representative test pattern:
+
+```python
+from __future__ import annotations
+
+import inspect
+import re
+from pathlib import Path
+from typing import Callable
+
+from hephaestus.automation.ci_fix_orchestrator import CIFixOrchestrator
+from hephaestus.automation.prompts.implementation import (
+    get_dirty_reused_worktree_decision_prompt,
+    get_impl_resume_feedback_prompt,
+    get_implementation_prompt,
+)
+from hephaestus.automation.prompts.planning import (
+    get_plan_loop_review_prompt,
+    get_plan_prompt,
+)
+
+DOC_PATH = Path("docs/AUTOMATION_LOOP_ARCHITECTURE.md")
+
+PROMPT_REFS: tuple[tuple[str, str, Callable[..., object]], ...] = (
+    ("prompts/planning.py", "get_plan_prompt", get_plan_prompt),
+    ("prompts/planning.py", "get_plan_loop_review_prompt", get_plan_loop_review_prompt),
+    (
+        "prompts/implementation.py",
+        "get_dirty_reused_worktree_decision_prompt",
+        get_dirty_reused_worktree_decision_prompt,
+    ),
+    ("prompts/implementation.py", "get_implementation_prompt", get_implementation_prompt),
+    (
+        "prompts/implementation.py",
+        "get_impl_resume_feedback_prompt",
+        get_impl_resume_feedback_prompt,
+    ),
+    ("ci_fix_orchestrator.py", "build_ci_fix_prompt", CIFixOrchestrator.build_ci_fix_prompt),
+    (
+        "ci_fix_orchestrator.py",
+        "force_engagement_prompt",
+        CIFixOrchestrator.force_engagement_prompt,
+    ),
+)
+
+
+def test_issue_1929_prompt_line_refs_match_source_definitions() -> None:
+    doc = DOC_PATH.read_text(encoding="utf-8")
+    for path, function_name, function in PROMPT_REFS:
+        expected_line = str(inspect.getsourcelines(function)[1])
+        refs = re.findall(rf"`{re.escape(path)}:(\d+)\s+{function_name}`", doc)
+        assert refs, f"missing documented reference for {path} {function_name}"
+        assert set(refs) == {expected_line}
+```
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -411,6 +506,7 @@ different — document the variant so future ADR work there matches the local co
 | Abbreviations in ROUTES table | Used `already_go_pr` and `not_impl_go` abbreviations in a ROUTES column | Inconsistent abbreviation drift: reviewers noticed some rows used `implementation_go_pr` (full name) and others used `go_pr` (short); abbreviations are harder to search/cross-ref than full names | Use consistent full-length identifiers in ROUTES and architecture tables; e.g., `already_implementation_go_pr`, `not_implementation_go` — same names must appear in stage documentation and stage-failure handling code |
 | Partial line range in code anchor citation | Referenced ASCII diagram with `:9-30` when diagram extended to line 37 | Reader saw only first part of diagram; later lines (31–37) were missing from citation range; created the impression the design was incomplete | Always cite the COMPLETE line range covering all content (`:9-37` not `:9-30`); verify by reading the lines before committing |
 | Inconsistent file:line for prompt paths | Documented `build_learn_prompt` in one location with `learn.py:111` but omitted file paths in other references | ROUTES table and per-stage docs referenced the same prompt-builder without consistent file:line; hard to locate source via search | Add file path and line number (`prompts/planning.py:223`, `learn.py:111`) to EVERY prompt-builder reference, even when the function appears multiple times; consistency enables cross-referencing and code search |
+| Trusting issue-body prompt line numbers | Used stale issue coordinates as the replacement values for prompt-function references | Prompt functions had moved; the doc would still be stale after the fix | Resolve live definitions with `rg -n "def (...)" hephaestus`, then guard the documented occurrences with `inspect.getsourcelines(...)` |
 
 ## Results & Parameters
 
@@ -470,12 +566,30 @@ When documenting a complex multi-stage system (such as an automation pipeline) t
 
 **Why this structure matters:** Future implementers need to understand intent (topology, contract) before writing code. The ROUTES table as a single source of truth prevents stage handlers from implementing divergent error handling. Full file:line citations in per-stage docs let implementers quickly locate prompt templates and coordinate changes.
 
+### ProjectHephaestus prompt-line reference guard parameters
+
+For issue #1929, the owned prompt-function references were:
+
+| Function | Live definition line found during session |
+| -------- | ----------------------------------------- |
+| `get_plan_prompt` | `hephaestus/automation/prompts/planning.py:232` |
+| `get_plan_loop_review_prompt` | `hephaestus/automation/prompts/planning.py:270` |
+| `get_implementation_prompt` | `hephaestus/automation/prompts/implementation.py:211` |
+| `get_dirty_reused_worktree_decision_prompt` | `hephaestus/automation/prompts/implementation.py:293` |
+| `get_impl_resume_feedback_prompt` | `hephaestus/automation/prompts/implementation.py:336` |
+| `force_engagement_prompt` | `hephaestus/automation/ci_fix_orchestrator.py:148` |
+| `build_ci_fix_prompt` | `hephaestus/automation/ci_fix_orchestrator.py:498` |
+
+The docs test should assert every documented occurrence for those functions, not
+just the first match, because stage tables can repeat the same prompt reference.
+
 ### Expected outcomes
 
 - Index updates are typically a single inserted table row; pre-commit passes (Markdown Lint, ruff, yaml, trailing-whitespace).
 - Status-defer changes are pure label updates with no formatting impact; markdownlint passes first try.
 - Directory-tree fixes are small (e.g., 1 removed, 5 added) and complete in a few minutes.
 - Pre-implementation architecture skeletons pass all doc tests (ADR index guards, link validation, markdown lints) and correctly guide the cutover implementation.
+- Prompt-function line reference fixes should fail before the doc update and pass after the doc update when the focused `tests/unit/docs/` guard uses `inspect.getsourcelines(...)`.
 
 ## Verified On
 
@@ -489,3 +603,4 @@ When documenting a complex multi-stage system (such as an automation pipeline) t
 | Odysseus | Issue #143, branch 143-auto-impl — ADR-009 cross-repo citation discipline: removed unverifiable ADR-015/016 claims; replaced with `ls docs/adr/` verification, commit SHA citations, and `CLAUDE.md:line` references | [history](adr-authoring-indexing-and-maintenance.history) |
 | ProjectHephaestus | Issue #1452 (2026-06-30) — author 4 ADRs (0002–0005) + `docs/adr/README.md` index + structural guard; tracked-symbol anchoring (ADR-0005), bidirectional README↔disk membership guard, tri-agent audit-characterization fix, Nygard 4-digit format variant (verified-local; CI pending) | [history](adr-authoring-indexing-and-maintenance.history) |
 | ProjectHephaestus | Issue #1810, PR #1811 (2026-07-04) — ADR-0006 queue-based in-process automation pipeline + AUTOMATION_LOOP_ARCHITECTURE.md skeleton; discovered ADR guard enforcement via regex patterns, emphasized consistency in full-name use (not abbreviations) in ROUTES tables, full line-range citations for code anchors, file:line consistency for prompt-path references, and pre-implementation skeleton structure (status banner, topology, coordinator/worker contract, per-stage docs, ROUTES table, seeding/reconstruction table, "finalized-in-cutover" sections) | [history](adr-authoring-indexing-and-maintenance.history) |
+| ProjectHephaestus | Issue #1929 (2026-07-07) — proposed pattern for refreshing stale prompt-function line references in `docs/AUTOMATION_LOOP_ARCHITECTURE.md` and guarding them with `inspect.getsourcelines(...)`; ProjectHephaestus tests not verified in this workflow | [history](adr-authoring-indexing-and-maintenance.history) |
