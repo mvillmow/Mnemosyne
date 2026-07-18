@@ -1,6 +1,23 @@
 <!-- markdownlint-disable MD024 -->
 # pr-rebase-conflict-resolution-patterns — History
 
+## v1.16.0 (2026-07-17)
+
+**Changed by:** ProjectHephaestus PR #2217 (issue #2152, branch `2152-auto-impl`, "[mino] Make generic local secret scanning mandatory") — drove a long-open auto-impl PR to green CI after its strict-review gate ImportError'd on a stale base.
+
+**Verification:** verified-ci — on the resolving PR #2217, full pytest reported `6406 passed` and `pre-commit run --all-files` was green on the rebased tree, and the PR merged with all required checks (including the previously-failing `strict-review-proof` merge-authorization gate) green.
+
+### What changed
+- Added trigger #26 to `## When to Use` (both the numbered `description:` list and the prose bullet list): a long-open PR fails a merge-authorization / strict-review gate with `No module named <pkg.gate_module>` — an ImportError from the GATE itself, not a conflict or a test assertion — because the branch's BASE SHA predates the commit that added the head-bound gate module to main; the gate runs the base tree where the module doesn't exist yet. Fix is to rebase onto CURRENT main so the trusted base contains the gate, NOT to vendor the module onto the stale branch.
+- Added `#### S. Stale base predates a newly-added head-bound merge-authorization gate — the gate ImportErrors, rebase to inherit it` with a cheap read-only diagnosis (`git rev-list --count` for how far behind; `git ls-tree` on `origin/main` vs the merge-base to prove the module is a main-only file the base never had) and the rebase-plus-resolve-config-drift fix. Cross-references § M (the mirror image: a rebase that CLAIMS success but left the base stale) and § B2 (re-sign replayed commits).
+- Added common trigger phrases: "No module named ... on the strict-review gate", "merge-authorization gate ImportError", "PR is N commits behind and the gate can't import", "strict_review_proof not found", "rebase to inherit the new required gate", "base SHA predates the gate module".
+- Added a new `## Verified On` row for HomericIntelligence/ProjectHephaestus PR #2217.
+- Added new kebab-case `tags:` entries: `stale-base-predates-gate`, `strict-review-proof`, `merge-authorization-gate`, `module-not-found-from-stale-base`, `head-bound-gate`, `base-sha-behind-main`, `gate-module-import-error`, `rebase-to-inherit-gate`.
+- Bumped version 1.15.0 -> 1.16.0 (MINOR — one new trigger/section extending an existing verified workflow, no breaking restructure); updated date to 2026-07-17.
+
+### Why
+The skill already covered a required check going SKIPPED via a `needs:` dependency on a lint job that fails an org-wide SHA-pin policy (§ J), and DIRTY-with-green-CI conflicts (§ P), but had no case for a *merge-authorization / strict-review* gate that hard-ImportErrors because the PR's base is older than the commit that introduced the gate module. That failure signature (`ModuleNotFoundError` from the gate's own entrypoint, not a conflict marker and not a test assertion) is easy to misread as "the module was deleted" or "the branch has a real defect," when the true cause is purely the branch's AGE. Documenting the read-only diagnosis (module present on `origin/main`, absent at the merge-base) and the rebase-to-inherit-the-gate fix — which simultaneously clears the co-occurring CONFLICTING/DIRTY state from unrelated infra drift merged meanwhile — keeps future resolvers from vendoring the gate module onto a stale branch instead of rebasing.
+
 ## v1.15.0 (2026-07-12)
 
 **Changed by:** ProjectHephaestus PR #2056 rebase (branch `2054-auto-impl`, "[Critical] Fail closed autonomous auto-merge paths"; 17 commits, 65 files, rebased forward ~38 commits onto `origin/main`)
