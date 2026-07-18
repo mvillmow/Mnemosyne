@@ -3,11 +3,17 @@ name: regression-test-from-issue-plan
 description: 'Add missing regression tests by reading the issue''s implementation
   plan. Use when: (1) an issue references a test by name that should exist as a harness,
   (2) a bug fix landed but the named test was never added, (3) issue comments contain
-  hand-computed expected values.'
+  hand-computed expected values, (4) the code fix is ALREADY MERGED (a half-zombie
+  issue whose only live acceptance criterion is the paired regression test) so you
+  cannot get a genuine RED from committed code and must demonstrate "fails-before"
+  via a reviewer-runnable, NON-COMMITTED source mutation, (5) the guard pins a
+  single value in an allowlist/dispatch table and needs a positive + discriminating
+  negative pair to avoid passing vacuously.'
 category: testing
-date: 2026-03-15
-version: 1.0.0
+date: 2026-07-17
+version: 1.1.0
 user-invocable: false
+verification: verified-local
 ---
 ## Overview
 
@@ -25,6 +31,15 @@ user-invocable: false
 - Issue comments contain hand-computed expected values for specific inputs
 - Issue cross-references another issue that planned a test (e.g. "follow-up from #NNNN")
 - `grep -r "test_<name>" tests/` returns no matches for a test the issue expects to exist
+- **Half-zombie issue**: the referenced fix PR is already MERGED (the source
+  behavior is correct on `main`) but the issue's binding acceptance criterion is
+  a *focused regression test that fails before and passes after*. You cannot get
+  a genuine RED from committed code — the "fails-before" must be demonstrated a
+  different way (see the *already-merged* section below).
+- The behavior to pin is a single entry in an allowlist / lookup / dispatch
+  table (e.g. a valid git-porcelain status pair such as `" T"` inside a
+  `frozenset` of accepted pairs). A bare positive assertion can pass vacuously;
+  it needs a discriminating negative sibling.
 
 ## Verified Workflow
 
@@ -63,6 +78,68 @@ SKIP=mojo-format pixi run pre-commit run --files <file>
 8. **Validate** — `SKIP=mojo-format pixi run pre-commit run --files <file>`
 9. **Commit and PR** — `git add <file> && git commit -m "test(scope): add <name> regression test"`
 
+### When the fix is ALREADY MERGED: proving "fails-before" without a real RED
+
+If step 3 (`git log`) shows the source fix already landed, the paired test is
+GREEN the moment you write it — there is no pre-fix commit to run it against, so
+you cannot demonstrate a genuine RED. Do **not** hand-write or commit a failure
+log to fake it (RUNNABLE-EVIDENCE / ADR-014). Instead, prove the guard is
+non-vacuous with a **reviewer-runnable, NON-COMMITTED source mutation**:
+
+1. Write the positive test that asserts the fixed behavior; confirm it PASSES on
+   unmodified `main`.
+2. In the *plan and PR body only*, author the fails-before demonstration as an
+   inspectable command sequence: temporarily revert the one-token change that the
+   merged fix introduced (e.g. delete `T` from the allowlist generator), re-run
+   the new test — it MUST report `1 failed` — then `git checkout --` the file and
+   confirm `1 passed` again. The mutation is never committed.
+3. Pair the positive test with a **discriminating negative** so the guard cannot
+   pass vacuously: assert that a sibling value the allowlist should still REJECT
+   raises. Pick negatives that are absent from the set but adjacent to accepted
+   entries, so they exercise the reject branch without colliding with a valid
+   pair. Verify the choice by enumerating the actual set before asserting:
+
+```bash
+# Enumerate the real allowlist so the negative params are provably REJECTed
+python3 - <<'PY'
+pairs = (
+    {"D ", "DD", "AU", "UD", "UA", "DU", "AA", "UU", "??"}
+    | {f" {w}" for w in "AMDTRC"}
+    | {f"{i}{w}" for i in "MTARC" for w in " MTD"}
+)
+for s in (" T", "TA", "TR", "TC", "TM", "TD", "T "):
+    print(f"{s!r}: {'ACCEPT' if s in pairs else 'REJECT'}")
+PY
+# → ' T': ACCEPT ; 'TA'/'TR'/'TC': REJECT ; 'TM'/'TD'/'T ': ACCEPT
+# so parametrize the negative test over ("TA","TR","TC"), NOT "TM"/"TD"/"T ".
+```
+
+```python
+def test_accepts_worktree_type_change_status(self) -> None:
+    """Regression: a worktree-only type change `" T"` is a valid porcelain pair.
+
+    The fix (already merged) added `" T"` to the accepted set; this pins it so a
+    future edit to that allowlist cannot silently reject the entry again.
+    """
+    assert pr_manager._parse_porcelain_status(" T src/type-changed.py\0") == (
+        (" T", "src/type-changed.py"),
+    )
+
+@pytest.mark.parametrize("status", ("TA", "TR", "TC"))
+def test_rejects_invalid_type_change_status(self, status: str) -> None:
+    """Discriminating negative: an unsupported T-pair must still raise."""
+    with pytest.raises(RuntimeError, match="Malformed"):
+        pr_manager._parse_porcelain_status(f"{status} src/type-changed.py\0")
+```
+
+**Why this passes review:** the reviewer NOGOs an already-merged "regression"
+test that only re-encodes shipped behavior with no proof it gates anything. The
+non-committed mutation names *exactly* the change each test catches, and the
+positive+negative pair proves the guard discriminates the accepted value from
+its rejected siblings. Confine the diff to the test file — re-editing the
+already-correct source is churn (KISS/YAGNI) and re-opens the silent-corruption
+class the fix closed.
+
 ### Key insight: `_get_float64` vs stride-based indexing
 
 When `as_contiguous()` uses `_get_float64(i)` with a flat index, it reads `index * dtype_size` from
@@ -79,6 +156,8 @@ Know which branch is exercised before computing expected values.
 | Checked existing branch for the fix | Expected `4088-fix-as-contiguous` branch to contain the test | Branch had a different change (pre-commit hook), not the regression test | Branch names can be misleading; use `git diff main..<branch> -- <file>` to confirm |
 | Considered adding to original test file | `test_utility.mojo` seemed consistent with issue plan | File had 43 tests — far exceeds the ≤10 fn test_ limit | Always count tests before adding; use numbered part files |
 | Assumed the fix still needed implementing | Expected the source fix to be missing | Fix was already in `shape.mojo` from a prior commit | Check `git log` for the source file first — fix and test can land separately |
+| Planned to re-edit the source to force a RED | On a half-zombie issue whose fix was already merged (#2208), considered re-adding the parser change to get a genuine fails-before | The value was already in the allowlist; re-editing correct source is churn and re-opens the silent-corruption class the fix closed | When the fix is merged, demonstrate fails-before with a NON-COMMITTED mutation in the plan/PR, and confine the committed diff to the test file |
+| Wrote only a positive assertion | `assert _parse_porcelain_status(" T …") == ((" T", …),)` alone | A bare positive re-encodes shipped behavior and can pass vacuously; a reviewer NOGOs "tests encode the contract" with no named mutation | Pair every positive with a discriminating negative over sibling values the set must REJECT (enumerate the set first to pick provably-rejected params) |
 
 ## Results & Parameters
 
@@ -139,3 +218,15 @@ grep -c "^fn test_" tests/path/to/file.mojo
 | Project | Context | Details |
 | --------- | --------- | --------- |
 | ProjectOdyssey | Issue #4088, PR #4868 | [notes.md](../references/notes.md) |
+| ProjectHephaestus | Issue #2228 (half-zombie; fix merged via PR #2208) | Only live acceptance criterion was a focused regression test; fails-before demonstrated via non-committed deletion of `T` from `_PORCELAIN_STATUS_PAIRS` at `hephaestus/automation/pr_manager.py:77`; positive `test_accepts_worktree_type_change_status` + negative `test_rejects_invalid_type_change_status(("TA","TR","TC"))` in `tests/unit/automation/test_pr_manager_commit.py` |
+
+### Related skills
+
+- `testing-non-vacuous-regression-guards-behavior-unchanged` — the mutation
+  spot-check / positive+negative discipline for docstring-only fixes; this skill
+  applies the same non-vacuity proof to an already-merged *behavioral* fix.
+- `automation-moot-issue-regression-guard-pattern` — the *fully* moot case
+  (every cited symbol/PR never existed → AST DRY count-guard); use that when the
+  premise is false, this one when the fix is real and already shipped.
+- `planning-check-already-shipped-before-planning` — detecting the already-merged
+  condition before you plan any source change.
