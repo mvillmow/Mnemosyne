@@ -3,7 +3,7 @@ name: regression-test-from-issue-plan
 description: "Recover missing regression tests from issue plans and choose the lowest test tier that proves the real boundary. Use when: (1) an issue references a test that should exist as a harness, (2) a bug fix landed without its named regression, (3) issue comments contain hand-computed expected values, (4) a parser consumes external-tool output whose producer semantics must be exercised without mocks."
 category: testing
 date: 2026-07-20
-version: "1.1.0"
+version: "1.1.1"
 user-invocable: false
 verification: unverified
 history: regression-test-from-issue-plan.history
@@ -236,7 +236,7 @@ def test_real_type_change_reaches_the_index(tmp_path: Path) -> None:
     _git(
         repo,
         "-c", "user.name=Integration Test",
-        "-c", "user.email=test@example.invalid",
+        "-c", "user.email=integration-test.invalid",
         "-c", "core.hooksPath=/dev/null",
         "commit", "--no-gpg-sign", "-qm", "test: add baseline",
     )
