@@ -1,11 +1,11 @@
 ---
 name: gha-required-checks-branch-protection
-description: "Use when: (1) PRs are permanently BLOCKED because a required status-check context is a job gated by if: github.event_name != 'pull_request' (skipped != satisfied), (2) consolidating duplicate CI jobs into a reusable workflow so _required.yml is a thin aggregator, (3) validating GitHub branch protection API responses and writing synthetic tests for bash enforcement scripts, (4) a summary aggregator job pattern is needed to replace N individual required contexts with one that handles skip semantics correctly, (5) adding a RESULTS-loop aggregator gate to _required.yml with a guard test asserting all non-excluded jobs are wired into needs, (6) guard test needs a provable negative path to catch silently-inverted conditions [verified-local: _unwired_jobs helper pattern, PR #1343], (7) job key vs context name disambiguation for branch protection contexts, (8) GET-before-PUT mitigation for destructive branch protection API, (9) requirements deviation must be disclosed explicitly in implementation plans, (10) you are placing a merge-blocking CI guard and must confirm its job is a pinned required status-check context, not an advisory job — enumerate the ruleset's required contexts and check your target job name is in that set, else the guard is green-but-non-blocking and a regression merges clean, (11) an issue claims a prerequisite PR already 'added'/'landed'/'introduced' a CI job that a new required-context depends on — verify that PR is actually merged to the default branch (gh pr view <n> --json state,mergedAt + grep the file on main) BEFORE adding the context, else the never-posted context bricks the merge queue, (12) you are writing a runbook for a destructive full-replacement API write (branch-protection/ruleset PUT) and must include an explicit ROLLBACK (re-PUT the snapshot on read-back failure), not just a read-back; and derive sibling foreign keys (integration_id) dynamically from the live object rather than hardcoding a literal, (13) verifying a job is a pinned required status-check context in a fleet that uses BOTH org-level and repo-level rulesets — enumerate both and normalize the org `Required Checks / <job>` prefix vs the bare repo form, because checking one ruleset or matching only the bare name yields a false negative/positive on the other, (14) an advisory or scheduled workflow contains a compliance or security check that project documentation claims is 'CI-enforced on every PR' — verify the job is actually wired into the branch-protection required context (e.g. required-checks-gate.needs), not just present in any workflow file; if not, promote it using the 5-step job-promotion pattern (Section M), (15) preparing a staged merge-queue rollout — store the exact required contexts and exact `merge_queue` rule in one committed JSON policy artifact, test it exactly, derive both live activation and a representative merge-group smoke check from it, and keep the readiness issue open until post-merge evidence exists."
+description: "Use when: (1) PRs are permanently BLOCKED because a required status-check context is a job gated by if: github.event_name != 'pull_request' (skipped != satisfied), (2) consolidating duplicate CI jobs into a reusable workflow so _required.yml is a thin aggregator, (3) validating GitHub branch protection API responses and writing synthetic tests for bash enforcement scripts, (4) a summary aggregator job pattern is needed to replace N individual required contexts with one that handles skip semantics correctly, (5) adding a RESULTS-loop aggregator gate to _required.yml with a guard test asserting all non-excluded jobs are wired into needs, (6) guard test needs a provable negative path to catch silently-inverted conditions [verified-local: _unwired_jobs helper pattern, PR #1343], (7) job key vs context name disambiguation for branch protection contexts, (8) GET-before-PUT mitigation for destructive branch protection API, (9) requirements deviation must be disclosed explicitly in implementation plans, (10) you are placing a merge-blocking CI guard and must confirm its job is a pinned required status-check context, not an advisory job — enumerate the ruleset's required contexts and check your target job name is in that set, else the guard is green-but-non-blocking and a regression merges clean, (11) an issue claims a prerequisite PR already 'added'/'landed'/'introduced' a CI job that a new required-context depends on — verify that PR is actually merged to the default branch (gh pr view <n> --json state,mergedAt + grep the file on main) BEFORE adding the context, else the never-posted context bricks the merge queue, (12) you are writing a runbook for a destructive full-replacement API write (branch-protection/ruleset PUT) and must include an explicit ROLLBACK (re-PUT the snapshot on read-back failure), not just a read-back; and derive sibling foreign keys (integration_id) dynamically from the live object rather than hardcoding a literal, (13) verifying a job is a pinned required status-check context in a fleet that uses BOTH org-level and repo-level rulesets — enumerate both and normalize the org `Required Checks / <job>` prefix vs the bare repo form, because checking one ruleset or matching only the bare name yields a false negative/positive on the other, (14) an advisory or scheduled workflow contains a compliance or security check that project documentation claims is 'CI-enforced on every PR' — verify the job is actually wired into the branch-protection required context (e.g. required-checks-gate.needs), not just present in any workflow file; if not, promote it using the 5-step job-promotion pattern (Section M), (15) preparing a staged merge-queue rollout — store the exact required contexts and exact `merge_queue` rule in one committed JSON policy artifact, test it exactly, derive both live activation and a representative merge-group smoke check from it, and keep the readiness issue open until post-merge evidence exists, (16) live-enabling a merge queue across a repository fleet — snapshot and preserve each ruleset, verify the exact queue object, require repository auto-merge availability, and prove it with a completed merge-group run, (17) a PR is armed/queued with ALL required status-check contexts green yet silently never merges — a merge queue re-runs the whole gate WORKFLOW on the `gh-readonly-queue/...` merge-result, so a NON-required-context job (e.g. `markdownlint`) that lives INSIDE the Required-Checks workflow and fails on the merge-result makes the workflow report failure and EJECTS the PR from the queue; 'all required contexts green' is necessary but NOT sufficient — every JOB in the gate workflow must be green too, else silent queue ejection."
 category: ci-cd
-date: 2026-07-16
-version: "1.10.0"
+date: 2026-07-20
+version: "1.13.0"
 user-invocable: false
-verification: verified-local
+verification: verified-ci
 history: gha-required-checks-branch-protection.history
 tags:
   - github-actions
@@ -43,6 +43,13 @@ tags:
   - json-policy
   - exact-contexts
   - staged-rollout
+  - merge-queue-ejection
+  - readonly-queue
+  - markdownlint
+  - required-checks-workflow
+  - coupled-required-contexts
+  - merge-queue-timeout
+  - fleet-disable
 ---
 
 # GitHub Actions Required Checks and Branch Protection
@@ -51,10 +58,11 @@ tags:
 
 | Field | Value |
 | ------- | ------- |
-| **Date** | 2026-07-16 (v1.10.0) · 2026-06-24 (v1.9.0) · 2026-06-20 (v1.5.0) · 2026-06-14 (v1.4.0) |
-| **Objective** | Make required status checks satisfiable and maintainable: handle skip-vs-success semantics with a `summary` aggregator, consolidate duplicate jobs into a reusable `workflow_call` workflow, validate branch-protection API writes with read-back, smoke-test workflow structure, add a RESULTS-loop gate with guard test, document guard-test negative-path, job-key vs context-name disambiguation, destructive PUT mitigation, requirements-deviation disclosure, required-status-check placement, advisory-to-gate promotion, and (v1.10.0) a JSON policy-as-code contract for staged merge-queue activation and merge-group smoke evidence |
-| **Outcome** | Consolidated guidance covering twelve interacting concerns; v1.10.0 makes merge-queue policy load-bearing instead of duplicating it in Markdown or test prose |
-| **Verification** | verified-ci (core patterns); verified-local (section F: _unwired_jobs helper + 3-test pattern, PR #1343; section J: required-context enumeration `jq` query WAS run, returned the listed contexts — but the proposed guard placement itself is **unverified** / planning-only; section K: the prerequisite-PR premise-check technique WAS run — `gh pr view 264` returned OPEN/`mergedAt:null` and the `main` grep returned empty — but the proposed ruleset-edit runbook is **unverified** / planning-only; section L: the reviewer NOGO on issue #284 R0 that motivated the rollback/dynamic-integration_id learning is real and **verified-local**, but the proposed rollback runbook + dynamic-`integration_id` jq merge are **unverified** / planning-only — the ruleset PUT/rollback was NOT executed; section J2 (v1.8.0): the repo-ruleset enumeration leg is **verified-local** (8 bare contexts incl. `schema-validation` returned this session) but the org-ruleset `Required Checks / <job>` prefix parity is **unverified** — documentation-derived from `canonical-checks.md:58-62`, `org-ruleset.json` not opened/grepped this iteration; section M (v1.9.0): all 7 gate tests pass locally + yamllint clean — **verified-local** (issue #1514, ProjectHephaestus); section N (v1.10.0): Telemachy #308 / replacement PR #310 has TDD RED 3 failed/4 passed, GREEN 7 passed, full suite 290 passed/3 skipped at 88.86% coverage plus all stated static checks; GitHub verified commit signature and DCO, but PR #310 CI is still queued/in progress, so this addition remains **verified-local**)) |
+| **Date** | 2026-07-20 (v1.13.0) · 2026-07-18 (v1.12.0) · 2026-07-17 (v1.11.0) · 2026-07-16 (v1.10.0) · 2026-06-24 (v1.9.0) · 2026-06-20 (v1.5.0) · 2026-06-14 (v1.4.0) |
+| **Objective** | Make required status checks satisfiable and maintainable: handle skip-vs-success semantics with a `summary` aggregator, consolidate duplicate jobs into a reusable `workflow_call` workflow, validate branch-protection API writes with read-back, smoke-test workflow structure, add a RESULTS-loop gate with guard test, document guard-test negative-path, job-key vs context-name disambiguation, destructive PUT mitigation, requirements-deviation disclosure, required-status-check placement, advisory-to-gate promotion, a JSON policy-as-code contract for staged merge-queue activation, live fleet activation with representative merge-group evidence, and (v1.12.0) merge-queue ejection by a non-required-context job living inside the Required-Checks gate workflow |
+| **Outcome** | Consolidated guidance covering thirteen interacting concerns; v1.12.0 adds the merge-queue ejection trap — a non-required-context job (e.g. `markdownlint`) inside the gate WORKFLOW failing on the `gh-readonly-queue` merge-result silently ejects an armed PR, so "all required contexts green" is necessary but not sufficient to merge via a queue |
+| **Verification** | verified-ci (core patterns; Section N v1.11 live fleet activation: exact ruleset read-backs, Athena queue entry, `merge_group` run `29609074296`, and merge at its synthetic SHA; Section O v1.12 merge-queue ejection: live on Agamemnon #457 during the pixi→uv migration — armed with all 18 required contexts green, ejected because the Required-Checks workflow's `markdownlint` job failed MD024 on the merge-result, fixing the CHANGELOG re-admitted it; same class on Nestor #133 (MD013)); verified-local (section F: _unwired_jobs helper + 3-test pattern, PR #1343; section J: required-context enumeration `jq` query WAS run, returned the listed contexts — but the proposed guard placement itself is **unverified** / planning-only; section K: the prerequisite-PR premise-check technique WAS run — `gh pr view 264` returned OPEN/`mergedAt:null` and the `main` grep returned empty — but the proposed ruleset-edit runbook is **unverified** / planning-only; section L: the reviewer NOGO on issue #284 R0 that motivated the rollback/dynamic-integration_id learning is real and **verified-local**, but the proposed rollback runbook + dynamic-`integration_id` jq merge are **unverified** / planning-only — the ruleset PUT/rollback was NOT executed; section J2 (v1.8.0): the repo-ruleset enumeration leg is **verified-local** (8 bare contexts incl. `schema-validation` returned this session) but the org-ruleset `Required Checks / <job>` prefix parity is **unverified** — documentation-derived from `canonical-checks.md:58-62`, `org-ruleset.json` not opened/grepped this iteration; section M (v1.9.0): all 7 gate tests pass locally + yamllint clean — **verified-local** (issue #1514, ProjectHephaestus); section N (v1.10.0): Telemachy #308 / replacement PR #310 has TDD RED 3 failed/4 passed, GREEN 7 passed, full suite 290 passed/3 skipped at 88.86% coverage plus all stated static checks; GitHub verified commit signature and DCO, but PR #310 CI was still queued/in progress at capture)) |
+| **Latest update** | v1.13.0 is **verified-ci**: Mnemosyne PR #3189 removed the full gate's `merge_group` trigger but left its contexts required, producing three `checks_timed_out` queue removals. Restoring a same-context design is the durable fix; removing only the `merge_queue` rule from 15 active rulesets across 17 repositories safely disabled the queue while preserving every other baseline rule, and all signed Mnemosyne PRs then merged with GitHub-verified squash commits. |
 
 ## When to Use
 
@@ -71,6 +79,9 @@ tags:
 - **(v1.8.0)** You are verifying that a job is a pinned required status-check context in a fleet that pins checks through BOTH an org-level ruleset AND a repo-level ruleset — and the two use DIFFERENT context-string conventions (the repo ruleset pins the BARE job name `schema-validation` with `integration_id: 15368`; the org ruleset pins the PREFIXED form `Required Checks / schema-validation`). Enumerating only `repo-ruleset.json`, or matching only the bare name (`grep -qx schema-validation`), gives a false negative/positive on the org file. Enumerate BOTH rulesets and normalize the org-vs-repo FORM (`grep -qxE 'schema-validation|Required Checks / schema-validation'`) before asserting membership. This is the inverse detail of Section J: Section J says "place the guard where the context is pinned"; this says "and when you verify that, check both rulesets and both context-string forms, or your verification itself is wrong."
 - **(v1.9.0)** An advisory or scheduled workflow contains a compliance or security check that project documentation claims is "CI-enforced on every PR" — verify the job is actually wired into the branch-protection required context (here: `required-checks-gate.needs` in `_required.yml`), not just present in some workflow file. A job that lives only in `security.yml` or any non-gate workflow is advisory regardless of what NOTICE, README, or in-file comments say. When verification reveals the gap, use the 5-step job-promotion pattern (Section M) to promote the job from advisory to merge-blocking. NOTE: the aggregator pattern (this repo's `required-checks-gate` in `_required.yml`) means NO branch-protection PUT is ever needed — just add the job to `_required.yml` and wire it into `required-checks-gate.needs`.
 - **(v1.10.0)** You are preparing a staged merge-queue rollout where the readiness PR must enable `merge_group` checks but live ruleset activation and a representative queued run are post-merge operator work. Put the exact required contexts and exact `merge_queue` object in one committed JSON artifact; test that artifact and exact workflow triggers independently; derive the append-only live ruleset payload, preflight, and selected-merge-group smoke assertions from it. Use `Refs #<issue>`, not `Closes`, until activation and smoke evidence are recorded. If an existing campaign commit lacks DCO and force-push is prohibited, open a fresh signed replacement PR from `origin/main` before closing the old PR (Section N).
+- **(v1.11.0)** You are live-enabling a merge queue in one or many repositories. Before the first write, snapshot every ruleset and reject an existing queue rule; append only the exact approved queue object, read it back, and immediately restore the snapshot on mismatch. Also verify `allow_auto_merge`: GitHub CLI submission to a merge queue can fail with `Auto merge is not allowed for this repository` even when the queue ruleset is active. Enabling that repository setting, re-checking it, and then observing a successful `merge_group` run and actual merge is the operational proof (Section N).
+- **(v1.12.0)** An armed/queued PR shows **ALL required status-check contexts green** yet silently never merges. When a merge queue forms a batch it creates a `gh-readonly-queue/...` merge-result branch and RE-RUNS the workflows on it. If the "Required Checks" WORKFLOW (the Actions workflow file, e.g. `_required.yml`) contains a job that is NOT a required status-check *context* in the ruleset (e.g. `markdownlint`) and that job FAILS on the merge-result, the whole workflow reports failure and GitHub EJECTS the PR from the queue — even though that job was never a required context and the PR head showed every *required* context green. The sharpened gate bar: "all REQUIRED contexts green" is necessary but **NOT sufficient** to merge via a queue; every JOB in the Required-Checks workflow (including non-required-context jobs) must be green, else silent queue ejection. Inspect the merge-result run and either fix the failing job's content or move it out of the gate workflow into a standalone advisory workflow (Section O).
+- **(v1.13.0)** A merge queue reports repeated `checks_timed_out` removals even though its new fast smoke workflow is green. Required status-check names are coupled across `pull_request` and `merge_group`; removing the full gate's `merge_group` trigger while its contexts remain required leaves those contexts unreported on the synthetic SHA. Keep each required context on both events, or emit one stable required aggregate context on both events (full PR suite versus targeted merge-group smoke). If an incident requires disabling queues fleet-wide, remove **only** `merge_queue` from complete GET-derived ruleset payloads and assert every other rule survives (Section P).
 
 ## Verified Workflow
 
@@ -913,7 +924,113 @@ test "$EMITTED" = "$EXPECTED"
 
 **Generalizable rule:** *Policy that controls a merge queue must be executable data. Tests prove its literal contents and trigger boundaries; live activation and the merge-group smoke consume the same object; the issue remains open until the operational evidence exists.*
 
+##### Operational activation and smoke (verified-ci — HomericIntelligence fleet, 2026-07-17)
+
+**Observed prerequisite:** a valid active `merge_queue` ruleset is insufficient for `gh pr merge --auto --squash` when the repository has `allow_auto_merge: false`. The CLI reports `Auto merge is not allowed for this repository (enablePullRequestAutoMerge)` rather than adding the ready PR to the queue. Read the field for every target repository; enable it only where false and require a true read-back before retrying the enqueue.
+
+**Fleet-safe procedure:**
+
+1. For each repository, GET the named branch ruleset and construct a restore payload from only `name`, `target`, `enforcement`, `conditions`, `bypass_actors`, and `rules`. Refuse any baseline missing `required_signatures`, `pull_request`, or `required_status_checks`, and refuse a baseline that already has `merge_queue`.
+2. Append the exact approved object to `rules` without changing the other entries; PUT the complete ruleset. Immediately GET again and assert that every non-queue rule and every preserved top-level field matches the snapshot, and that the sole queue rule equals the approved object byte-for-byte in JSON semantics. If the PUT fails or the read-back differs, PUT the snapshot back before stopping.
+3. Rebase a real, signed and DCO-attested PR onto current `main`; wait for fresh PR-head required checks. Submit it with `gh pr merge <number> --repo <owner/repo> --auto --squash`.
+4. Prove the queue entry exists (`isInMergeQueue: true`), capture its synthetic head SHA, and select the Actions run whose `event` is exactly `merge_group` and whose `headSha` equals that SHA. Do not accept a successful PR-head run as smoke evidence.
+5. Require the selected run to conclude `success` and the PR to become `MERGED`. In the observed fleet, all 16 rulesets and `allow_auto_merge` settings read back correctly; Athena PR #45 created merge-group commit `93a2e7f…`, its Required Checks run `29609074296` succeeded, and GitHub merged that exact synthetic commit.
+
+**Queueing follow-on PRs:** do not rebase or enqueue a dependency PR if its patch has already been superseded by a stricter security fix on `main`; resolving it would either make it empty or weaken the constraint. Close it with the supersession reason. Rebase the remaining meaningful PRs in isolated worktrees, verify each rewritten commit's signature and DCO, force-push only with an exact prior-head lease, wait for fresh checks, then enqueue them in order.
+
 **Cross-references:** Section L (snapshot, read-back, and rollback for destructive full-replacement ruleset PUTs), Section J/J2 (actual required-context identity and placement), and `tooling-force-push-blocked-reopen-as-fresh-branch` (fresh-branch fallback when history cannot be rewritten).
+
+#### O. Merge-queue ejection by a non-required-context job inside the gate WORKFLOW (verified-ci — Agamemnon #457, Nestor #133)
+
+> **Verification:** **verified-ci** — live on HomericIntelligence/Agamemnon PR #457 during the pixi→uv migration: the PR was armed with all 18 required status-check contexts green and queued, but was ejected from the merge queue because the "Required Checks" workflow's `markdownlint` job failed MD024 (a duplicate `Changed` heading in the CHANGELOG) when it re-ran on the `gh-readonly-queue/...` merge-result. Fixing the CHANGELOG re-admitted the PR and it merged. The same class hit HomericIntelligence/Nestor PR #133 (MD013).
+
+This is the inverse of the trigger-#10 model. Trigger #10 / Section J say a job in a NON-required context is *advisory* — "green-but-non-blocking," a regression merges clean. Section O is the SHARPER trap: a non-required-context job can still BLOCK a merge — not on the PR head, but on the queue's merge-result — by failing the whole gate WORKFLOW and ejecting the PR.
+
+**The mechanism.** A GitHub merge queue, when it forms a batch, creates a `gh-readonly-queue/<base>/pr-<n>-<sha>` merge-result branch and RE-RUNS the workflows on that synthetic commit. If the "Required Checks" WORKFLOW (the Actions workflow *file*, e.g. `_required.yml` / display name "Required Checks") contains a job — say `markdownlint` — that is NOT a required status-check *context* in the ruleset, and that job FAILS on the merge-result, the whole workflow run reports `conclusion: failure`. GitHub then EJECTS the PR from the queue. So a PR can be "all required contexts green, armed, queued" and still never merge, because a non-required job *inside the gate workflow* failed on the merge-result.
+
+**The sharpened gate bar.** "All REQUIRED contexts green" is necessary but **NOT sufficient** to merge via a queue. You must ALSO ensure every JOB in the Required-Checks workflow — including non-required-context jobs like `markdownlint` — is green on the merge-result, else silent queue ejection.
+
+**Detection.** When an armed/queued PR sits without merging, inspect the queue's merge-result run — the run whose `head_branch` contains `gh-readonly-queue`:
+
+```bash
+# Find the merge-result run(s) and their conclusion. A conclusion:"failure" on the
+# "Required Checks" run here IS the ejection.
+gh api repos/<owner>/<repo>/actions/runs \
+  --jq '[.workflow_runs[] | select(.head_branch | contains("gh-readonly-queue")) | {name, conclusion}]'
+
+# Then drill into the failed run's JOBS to find the offending non-required-context job.
+gh api repos/<owner>/<repo>/actions/runs/<id>/jobs \
+  --jq '[.jobs[] | select(.conclusion=="failure") | .name]'
+```
+
+**Fix options.**
+
+1. **Fix the failing job's content (the correct fix in most cases).** Make the non-required job pass on the merge-result — e.g. reflow the MD013 over-long line, or dedupe the MD024 duplicate heading (the Agamemnon case: a repeated `Changed` CHANGELOG heading). Once the job is green on the re-run, the PR is re-admitted and merges.
+2. **Move the job OUT of the gate workflow.** If the job genuinely should not gate the queue, relocate it from the Required-Checks workflow into a standalone advisory workflow (its own file), so a queue merge-result run of "Required Checks" no longer includes it and cannot eject on its failure.
+
+**Generalizable rule:** *a merge queue re-runs the entire gate WORKFLOW on the merge-result, so the queue's real bar is "every JOB in the Required-Checks workflow is green," not merely "every required status-check CONTEXT is green." A non-required-context job living inside the gate workflow can silently eject an armed PR. Either keep every job in that workflow green, or move non-gating jobs into a separate advisory workflow.*
+
+**Cross-references:** trigger #10 / Section J (the inverse — a non-required job is green-but-non-blocking on the PR head; here it becomes blocking on the merge-result), Section A (skip-vs-success semantics on required contexts), and Section N (merge-queue activation and the `merge_group`/`gh-readonly-queue` run model this ejection surfaces on).
+
+#### P. Required status-check names are coupled across PR and merge-group events; fleet disable is a safe incident rollback (verified-ci — Mnemosyne #3189, HomericIntelligence fleet)
+
+> **Verification:** **verified-ci** — Mnemosyne PR #3189 entered the queue four times. GitHub removed the first three entries with `checks_timed_out`; the fourth showed `Merge Queue Smoke` succeeding while the required contexts never posted. The PR removed `merge_group` from `_required.yml` and emitted only `merge-queue-smoke`, while the live baseline ruleset still required the full context set. Disabling only `merge_queue` from 15 active repository rulesets across the 17-repository HomericIntelligence inventory preserved signatures, pull-request rules, required checks, linear history, non-fast-forward protection, and deletion protection. All remaining signed Mnemosyne PRs then merged directly, and GitHub reported valid `web-flow` signatures on each squash commit.
+
+**The coupling rule.** GitHub branch rulesets require a status-check by its name; they do **not** select a different required list based on whether the SHA came from `pull_request` or `merge_group`. Therefore every context that remains required must be emitted on the queue's synthetic `gh-readonly-queue/...` SHA. A green `merge-queue-smoke` job cannot satisfy a ruleset waiting for `lint`, `test`, or any other different name.
+
+**Durable design.** Choose one of these intentionally:
+
+1. **Full revalidation:** trigger every required check on both `pull_request` and `merge_group`. This is the simplest and strongest design.
+2. **Event-specific workload behind one stable gate:** make one aggregate context (for example, `ci-gate`) the required context. On `pull_request`, `ci-gate` gates the full matrix; on `merge_group`, the **same named** `ci-gate` gates a focused integration smoke. The implementation may differ by event, but the required context name must remain identical on both SHAs. Do not replace the full trigger with a differently named smoke workflow while the old contexts remain required.
+
+**Diagnose before changing a queue.** Compare required names, merge-group emissions, and queue-removal reasons—not just PR-head checks:
+
+```bash
+repo=HomericIntelligence/Mnemosyne
+ruleset_id=17852368
+
+# Names GitHub requires on the PR head AND queue synthetic SHA.
+gh api "repos/$repo/rulesets/$ruleset_id" --jq \
+  '.rules[] | select(.type == "required_status_checks")
+   | .parameters.required_status_checks[].context'
+
+# A successful smoke run alone is insufficient; inspect the actual merge-group runs.
+gh run list --repo "$repo" --event merge_group --limit 30 \
+  --json displayTitle,headBranch,status,conclusion,createdAt
+
+# Timeline exposes `checks_timed_out`, not merely a generic blocked PR state.
+gh api graphql -f query='query {
+  repository(owner: "HomericIntelligence", name: "Mnemosyne") {
+    pullRequest(number: 3189) {
+      timelineItems(first: 100, itemTypes: [REMOVED_FROM_MERGE_QUEUE_EVENT]) {
+        nodes { ... on RemovedFromMergeQueueEvent { createdAt reason } }
+      }
+    }
+  }
+}'
+```
+
+**Incident rollback — remove only the queue rule.** A ruleset PUT replaces the complete object. GET each candidate first, derive the replacement from that exact object, filter **only** `merge_queue`, PUT, and read it back. Never hand-reconstruct `required_status_checks` or remove the whole baseline ruleset to unstick a queue.
+
+```bash
+repo=HomericIntelligence/Mnemosyne
+ruleset_id=17852368
+before=/tmp/ruleset-before.json
+without_queue=/tmp/ruleset-without-merge-queue.json
+
+gh api "repos/$repo/rulesets/$ruleset_id" > "$before"
+jq '{name, target, enforcement, conditions, bypass_actors,
+     rules: [.rules[] | select(.type != "merge_queue")]}' \
+  "$before" > "$without_queue"
+
+gh api --method PUT "repos/$repo/rulesets/$ruleset_id" --input "$without_queue"
+
+# Queue must be absent; every pre-existing non-queue rule must still be present.
+gh api "repos/$repo/rulesets/$ruleset_id" --jq \
+  '{name, target, enforcement, rules: [.rules[].type]}'
+```
+
+For a fleet, enumerate every accessible repository and all active repository-level rulesets first; make the same narrow change only to those whose rule types include `merge_queue`. Re-query the complete fleet afterwards and require an empty set. Re-enable a queue only after a real merge-group SHA emits every required context under the final ruleset.
 
 ## Failed Attempts
 
@@ -941,8 +1058,28 @@ test "$EMITTED" = "$EXPECTED"
 | Tested a JSON block embedded in Markdown | Repeated the required contexts and queue parameters in documentation, then made tests parse/assert that prose | The Markdown became a second policy source and coupled tests to wording instead of the operational contract | Commit one JSON policy artifact; documentation links to it, focused tests compare its exact values, and activation/smoke commands consume it |
 | Relied on a GitHub App to create the replacement PR | The App could read Telemachy data but returned HTTP 403 for PR creation | Read access did not grant write authority, leaving the DCO repair unable to publish through that path | Fall back only to authenticated `gh` for PR creation; never expose credentials in logs or command text |
 | Treated a repo-wide formatter result as a change failure | A broad format check found 14 pre-existing files outside the six-file readiness diff | Baseline debt obscured whether the changed test was correctly formatted | Run and report the changed-file formatter separately; disclose the baseline debt instead of claiming the whole repository is clean |
+| Submitted a ready PR to an active queue while repository auto-merge was disabled | Ran `gh pr merge --auto --squash` after the ruleset read-back succeeded | GitHub rejected the request with `Auto merge is not allowed for this repository`; the queue rule alone did not make the CLI submission path available | Inventory and read back `allow_auto_merge` alongside the ruleset; enable it only for repositories where it is false, then retry the queue submission |
+| Tried to preserve a stale dependency PR after a stronger security fix merged | Considered rebasing a PR that widened pytest to `>=8.0,<10` after `main` required `>=9.0.3,<10` | The patch conflicted and resolving it would either create an empty PR or reintroduce vulnerable versions | Close the superseded PR with an explanation; queue only distinct, meaningful changes after a signed rebase and fresh checks |
+| Armed a PR with all required contexts green; it silently never merged | Assumed "all REQUIRED status-check contexts green" was sufficient to merge via the queue | A non-required `markdownlint` job living INSIDE the Required-Checks workflow failed on the `gh-readonly-queue` merge-result, so the whole gate workflow reported failure and the queue EJECTED the PR — even though markdownlint is not a required context (Agamemnon #457: MD024 dup `Changed` heading; Nestor #133: MD013) | The queue re-runs the entire gate WORKFLOW on the merge-result; ensure every JOB in the Required-Checks workflow is green (not just required contexts), or move non-gating jobs into a standalone advisory workflow. Detect via the `gh-readonly-queue` merge-result run's `conclusion:"failure"` and drill into its jobs (Section O) |
+| Replaced full `merge_group` checks with a differently named smoke job | PR #3189 removed the full gate's `merge_group` trigger and added a green `merge-queue-smoke` workflow, while the live ruleset still required the original full check names | The queue's synthetic SHA emitted only `merge-queue-smoke`; required contexts such as `lint` never posted, so GitHub removed the PR with `checks_timed_out` three times | Required contexts are coupled across PR and merge-group events. Keep each required context on both events, or have both events emit one identical aggregate required context. For an incident rollback, filter only `merge_queue` from a complete GET-derived ruleset payload and verify all non-queue protections remain (Section P) |
 
 ## Results & Parameters
+
+### Coupled-context failure and fleet rollback evidence (v1.13.0 — Mnemosyne, verified-ci)
+
+| Observation | Verified result |
+| --- | --- |
+| Queue failure | #3189 was removed three times with `checks_timed_out`; `Merge Queue Smoke` succeeded but its different name did not satisfy the still-required full contexts. |
+| Root cause | The workflow removed `_required.yml`'s `merge_group` trigger before the required-context configuration changed, so no full required contexts were emitted on the synthetic merge-result SHA. |
+| Narrow rollback | 15 active `homeric-main-baseline` repository rulesets across 17 accessible HomericIntelligence repositories had only their `merge_queue` rule removed. Hephaestus and the `modular-community` fork had no queue rule. |
+| Preservation proof | Every update returned the same name, target, and enforcement plus the unchanged non-queue rules: deletion, non-fast-forward, required linear history, pull request, required status checks, and required signatures. The final organization query found zero active `MERGE_QUEUE` rules. |
+| Post-rollback completion | The 14 remaining Mnemosyne PRs merged directly; combined with #3172 and #3180, all 16 originally open PRs were merged. GitHub reported every resulting squash commit as `VALID`, signed by `web-flow`. |
+
+### Live fleet activation evidence (v1.11.0 — HomericIntelligence, verified-ci)
+
+The exact `ALLGREEN` queue object (60-minute response timeout, build concurrency 10, merge limit 1–5 with five-minute wait, `SQUASH`) was appended and independently read back on all 16 active HomericIntelligence repository branch rulesets. Every pre-existing ruleset field and non-queue rule was preserved. Fifteen repositories already had `allow_auto_merge: true`; Athena was the single exception and read back true after enabling it.
+
+Athena PR #45 was rebased onto current `main` with a verified signature and DCO trailer, passed fresh PR checks, entered the queue, produced synthetic merge-group head `93a2e7fd5915f16492c6fc108bf083ef20e1c68a`, and completed Required Checks run `29609074296` successfully. GitHub then merged PR #45 at that same synthetic SHA. This is **verified-ci** queue evidence, not merely a workflow-trigger assertion.
 
 ### Merge-queue policy-as-code evidence (v1.10.0 — Telemachy #308 / PR #310)
 
@@ -1125,10 +1262,14 @@ planning-only.
 | ProjectHephaestus | Issue #1514 (2026-06-24) | Section M — 5-step job-promotion pattern: `license-scan` promoted from advisory `security.yml`-only to merge-blocking via `_required.yml` + `required-checks-gate.needs`. All 7 gate tests pass locally, yamllint clean. Pattern: (1) add job to `_required.yml` with `changes-gate` guard + `env:` for context vars, (2) add to gate `needs:`, (3) add `if: github.event_name != 'pull_request'` to advisory copy, (4) add named test, (5) validate locally. No branch-protection PUT needed. **verified-local** |
 
 | Telemachy | Issue [#308](https://github.com/HomericIntelligence/Telemachy/issues/308), replacement PR [#310](https://github.com/HomericIntelligence/Telemachy/pull/310), commit `65c97ec2920ba89c9440edf00ea32a2b697ab608` (2026-07-16) | Section N — committed 12-context JSON policy + exact merge-queue rule; exact trigger/tag-only regressions; artifact-derived activation preflight and merge-group smoke procedure. TDD RED 3 failed/4 passed, GREEN 7 passed, full suite 290 passed/3 skipped, 88.86% coverage, static validation passed, GitHub signature/DCO verified. CI queued/in progress at capture: **verified-local**, not verified-ci. |
+| Agamemnon | PR #457 (pixi→uv migration, 2026-07-18) | Section O — merge-queue ejection by a non-required-context job inside the gate workflow: PR armed with all 18 required contexts green and queued, but EJECTED because the Required-Checks workflow's `markdownlint` job failed MD024 (duplicate `Changed` heading in the CHANGELOG) on the `gh-readonly-queue` merge-result; fixing the CHANGELOG re-admitted it and it merged. **verified-ci** |
+| Nestor | PR #133 | Section O — same ejection class: a `markdownlint` MD013 failure inside the Required-Checks workflow ejected an otherwise-green queued PR from the merge queue on the merge-result. **verified-ci** |
+| Mnemosyne + HomericIntelligence fleet | PR #3189 and 17-repository ruleset audit (2026-07-20) | Section P — GitHub required contexts were coupled across PR and merge-group SHAs: #3189's fast `merge-queue-smoke` job could not satisfy the unchanged full required set, producing three `checks_timed_out` removals. Removed only `merge_queue` from 15 active baseline rulesets; all other protections read back unchanged and the final fleet audit found none remaining. All 16 originally open Mnemosyne PRs merged with valid GitHub `web-flow` squash signatures. **verified-ci** |
 
 ## References
 
 - [GitHub Actions: Reusing workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
 - [GitHub Actions: `workflow_call` trigger](https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#workflow_call)
 - [GitHub: Branch rulesets and required checks](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/about-rulesets)
+- [GitHub: Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue)
 - [GitHub REST: Update branch protection](https://docs.github.com/en/rest/branches/branch-protection?apiVersion=2022-11-28#update-branch-protection)
