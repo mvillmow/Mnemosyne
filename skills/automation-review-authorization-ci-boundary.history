@@ -1,5 +1,24 @@
 # automation-review-authorization-ci-boundary — History
 
+## v1.5.0 (2026-07-27)
+
+**Changed by:** ProjectHephaestus issue #2232 / PR #2344 automation-loop review and merge path.
+**Verification:** verified-ci.
+
+### What changed
+- Added the fail-closed NOGO-to-merge rule: unsupported test claims and concrete review findings must be removed or fixed before re-review.
+- Added the environment-sensitive integration-test lesson: read-only execution cannot independently validate a test requiring a writable temporary repository.
+- Recorded the final current-head required-checks and normal `state:implementation-go` → `merge_wait` → merged-state path for PR #2344.
+
+### Why
+PR #2344 was substantively correct but received repeated NOGO results because a claimed full-suite count was not independently evidenced, the integration fixture could be altered by ambient Git configuration, and Ruff formatting needed correction. The PR merged only after those blockers were addressed and required checks passed on the final head. This extends v1.4.0's ownership-first merge-wait guidance with the evidence discipline required between NOGO and merge.
+
+### Previous version (v1.4.0) snapshot
+
+The exact v1.4.0 skill snapshot is preserved in the parent commit `937cf411` at `skills/automation-review-authorization-ci-boundary.md`; the v1.4.0 history entry below preserves the preceding snapshot and rationale.
+
+---
+
 ## v1.4.0 (2026-07-24)
 
 **Changed by:** ProjectHephaestus issue #2417 / PR #2422 automation-loop review and merge path.
