@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Keep automation-loop source-review authorization independent of CI/CD. Use when: (1) a strict PR review is mistakenly implemented as a required CI check, (2) an agent loop cannot observe or control the external workflow that is supposed to authorize it, (3) loop approval must survive restart using only loop-owned PR state, (4) repeated NOGO rounds need fail-closed evidence handling before merge, (5) merge-wait loses implementation approval after arming, or (6) a downstream rerun must short-circuit on a merged PR because GitHub clears autoMergeRequest after merge."
+description: "Keep automation-loop source-review authorization independent of CI/CD and preserve adopted PR branches through detached review. Use when: (1) review approval must bind to an exact head, (2) a clean detached worktree may contain an agent-precommitted fix, (3) an adopted PR head is confused with a disposable branch reservation, (4) repeated NOGO rounds need fail-closed evidence handling before merge, or (5) merge-wait must consume only current-head approval."
 category: architecture
-date: 2026-07-27
-version: "1.5.0"
+date: 2026-07-28
+version: "1.6.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -18,6 +18,9 @@ tags:
   - source-review
   - merge-wait
   - fail-back
+  - detached-review
+  - publication-lease
+  - adopted-pr-branch
 ---
 
 # Automation Review Authorization: CI Boundary
@@ -26,10 +29,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-07-24 |
+| **Date** | 2026-07-28 |
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce it at the auto-merge boundary. |
-| **Outcome** | ProjectHephaestus moved strict-review proof, workflow triggers, artifacts, leases, and CI-status contracts out of the authorization path. The loop's own CI-free PR review applies `state:implementation-go` after a GO verdict; its review-local payload is then reduced to a fixed non-authorizing context before `merge_wait` can consume the label. PR #2422 confirmed ownership-first recovery, and PR #2344 / issue #2232 confirmed that repeated NOGO rounds remain fail-closed until review findings and independently observed current-head CI evidence are resolved; only then does the normal label-driven merge path complete. |
-| **Verification** | verified-ci — PR #2344's required checks passed on the final head and the PR merged; the review decision itself remained source-review-only. |
+| **Outcome** | ProjectHephaestus keeps source-review authorization in the loop and binds publication and merge progression to the reviewed head. PR #2508 added the missing detached-review distinction: the reviewed remote head is a publication lease, not a disposable direct-scope branch reservation. A clean worktree with commits ahead publishes the exact detached `HEAD`; a clean worktree at the reviewed head performs no publication and never deletes the adopted PR branch. |
+| **Verification** | verified-ci — PR #2508 passed required checks on final head `55300bb4`, received `state:implementation-go` only after the current-head review, and merged as `6a3cb437`; the review decision remained source-review-only. |
 
 ## When to Use
 
@@ -43,6 +46,8 @@ tags:
 - A downstream rerun evaluates a PR after merge and must short-circuit on PR state instead of expecting `autoMergeRequest` to still be present; GitHub clears `autoMergeRequest` on merged PRs.
 - A `merge_wait` poll sees implementation approval missing and must distinguish a current-run arm from an externally armed PR before choosing fail-back, blocking, or terminal containment.
 - A PR has repeated NOGO reviews involving unproven test claims, stale heads, or environment-sensitive integration validation and must not advance to merge on prose alone.
+- A detached adopted-PR review returns a clean worktree and the coordinator must distinguish “no change” from “the address agent already committed the change.”
+- A commit/push helper receives both `publish_detached_head=True` and `expected_remote_sha`; the latter is a publication lease for the reviewed PR head, not ownership of a disposable branch reservation.
 
 ## Verified Workflow
 
@@ -60,6 +65,12 @@ merge-wait is also the authorization boundary of last resort
   2. durably defer any existing auto-merge request and re-read its state
   3. only then terminally fail the orphaned item
   4. retain the strict-review guard until the first successful arm confirmation
+
+detached adopted-PR publication
+  1. commit any dirty changes, then compare expected_remote_sha..HEAD
+  2. ahead > 0: publish exact HEAD with the expected remote SHA as the lease
+  3. ahead == 0: return no-publication; never release/delete the adopted PR branch
+  4. keep reservation cleanup only for coordinator-created direct-scope branches
 
 lost approval during merge-wait polling
   1. classify arm ownership before evaluating missing implementation approval
@@ -101,6 +112,10 @@ CI/CD is outside this decision:
 
 13. Treat each NOGO as a fail-closed review result, not as a merge-retry hint. Remove unsupported full-suite or tool-success claims, fix concrete findings (including ambient environment/configuration that can change integration behavior), and re-review the new head. The loop's source review remains CI-free, but merge readiness still requires independently observed required checks on that exact final head; after those checks pass, retain the ordinary `state:implementation-go` → `merge_wait` → merged-state confirmation path.
 
+14. Classify detached review publication by ancestry, not worktree dirtiness. `commit_if_changes() == False` proves only that there are no uncommitted edits; the address agent may already have committed a fix while leaving the detached worktree clean. Count `expected_remote_sha..HEAD`: when nonzero, publish the exact detached `HEAD` through the SHA-leased push path; when zero and `publish_detached_head=True`, return “nothing to publish” without calling branch-release cleanup. Only coordinator-created direct-scope reservations may use `delete_reserved_branch_if_unchanged`.
+
+15. Revoke review proof when a correction changes the head. Re-review the new exact head, confirm the complete thread state, and only then apply `state:implementation-go`. PR #2508 moved from an earlier reviewed head to `55300bb4` after the clean-worktree ambiguity was found; the final audit, label, and conditional merge all targeted that corrected head. Passing CI on the final head was merge-readiness evidence, not the source-review authorization.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -117,6 +132,8 @@ CI/CD is outside this decision:
 | Continue after a failed disarm or stale live arm | The stage attempted to recover review without proving auto-merge was disabled. | Review could proceed while an irreversible arm remained live. | Failed containment is terminal; require a fresh live-state read confirming disarm before fail-back. |
 | Treat a repeated NOGO as an actionable merge retry | PR #2344 / issue #2232 was reviewed repeatedly while the changed integration test had unproven full-suite claims, an ambient Git configuration hazard, and a formatting defect. | The implementation was substantively correct, but the evidence gate and concrete findings still prevented safe authorization; merging on the claim or on a prior head would have bypassed the review contract. | Keep the PR in NOGO/no-go until each finding is fixed, independently review the new head, and require current-head checks before normal merge-wait progression. |
 | Assume read-only review execution can validate real temporary-repository integration | The reviewer attempted to run the full/integration evidence in a read-only environment. | The test needed a writable temporary directory, so the claimed test count could not be independently confirmed there. | Treat sandbox-blocked execution as unavailable evidence; do not repeat the claim in PR prose, and use writable local or CI execution for merge evidence. |
+| Treat a clean detached worktree as “no fix” | Publication logic relied only on whether `commit_if_changes()` created a commit. | An address agent can commit its own fix, leaving the worktree clean while `HEAD` is ahead of the reviewed remote SHA. | After handling dirty changes, compare `expected_remote_sha..HEAD`; publish the exact detached head whenever it is ahead. |
+| Reuse direct-scope reservation cleanup for an adopted PR | A zero-ahead clean review routed `expected_remote_sha` through `delete_reserved_branch_if_unchanged`. | In detached review, that SHA identifies the adopted open PR head; successful cleanup would delete the contributor's remote branch. | Treat the reviewed SHA as a publication lease in detached mode. Zero-ahead means no publication and no deletion. |
 | Rewrite accepted ADRs to remove obsolete instructions | Historical ADR text was modified in place. | It obscured the decision record and broke the repository's ADR immutability convention. | Preserve accepted ADRs verbatim; add a superseding ADR and make the index point to the active policy. |
 
 ## Results & Parameters
@@ -133,6 +150,8 @@ CI/CD is outside this decision:
 | Post-merge terminality | PR #2306 / issue #2177 merged at `2026-07-21T01:53:35Z` with `state=MERGED`; `autoMergeRequest` is `null` and `mergeStateStatus` was `UNKNOWN` after merge. Downstream reruns must key off PR state and treat terminal PRs as complete. |
 | Review/merge evidence | Issue #2417 required rebase after #2418, exact `Closes #2417`, signed+DCO commits, stage/coordinator regressions, full validation, and the normal `state:implementation-go` label path. |
 | NOGO-to-merge evidence | PR #2344 / issue #2232 received repeated NOGO results for unproven full-suite claims, an ambient Git config injection risk, and formatting; after fixes, independently observed required checks passed on the final head and the PR merged at `2026-07-27T09:42:33Z` as `03e31fcd4e0af48ab5ccdbabda2b40c9b460fa3c`. |
+| Detached publication decision | With `publish_detached_head=True`, use `git rev-list --count expected_remote_sha..HEAD`: nonzero publishes exact `HEAD` with the expected SHA lease; zero returns false without branch-release cleanup. |
+| PR #2508 sequence | Corrected head `55300bb4` passed required checks; final current-head review posted; `state:implementation-go` applied at `2026-07-28T19:18:15Z`; conditional merge completed 12 seconds later as `6a3cb437`. |
 | Local validation example | `uv run pytest` over pipeline stage/coordinator and active-documentation/ADR tests: 85 passed; `git diff --check` passed. |
 | Historical-policy migration | Preserve accepted ADRs; record the new label-only rule in a superseding ADR and its index entry. |
 
@@ -144,3 +163,4 @@ CI/CD is outside this decision:
 | ProjectHephaestus | PR #2306 / issue #2177 | Docs PR that reached merged state through the normal review-to-merge path: review GO, loop-owned `state:implementation-go`, and merge_wait. Post-merge `gh pr view` showed `state=MERGED` with `autoMergeRequest=null`, confirming reruns must short-circuit on terminal PR state. |
 | ProjectHephaestus | PR #2422 / issue #2417 | After #2418 landed, the implementation preserved ownership-first polling: owned lost approval disarmed and failed back to `PR_REVIEW`; external arms stayed blocked; containment failures terminalized. The PR body contained `Closes #2417`, its full suite reported 6676 passed and 6 skipped, required checks passed, `state:implementation-go` was applied, and merge_wait completed the normal merge at `2026-07-24T16:01:09Z` as `d544776c`. Verified in CI. |
 | ProjectHephaestus | PR #2344 / issue #2232 | Repeated NOGO reviews stayed fail-closed: unproven “6474 passed” prose, read-only inability to run the writable-temp integration test, an ambient Git config injection hazard, and Ruff formatting were treated as blockers. After fixes and current-head required checks passed, the PR completed the normal review/label/merge path at `2026-07-27T09:42:33Z` with merge commit `03e31fcd4e0af48ab5ccdbabda2b40c9b460fa3c`. Verified in CI. |
+| ProjectHephaestus | PR #2508 / issue #2507 | A review correction distinguished two clean detached states: unchanged reviewed head (no publish, no branch release) and agent-precommitted head (publish exact `HEAD` through the reviewed-SHA lease). The corrected head `55300bb4` passed required checks, received a fresh current-head review and `state:implementation-go`, then merged as `6a3cb437`. Verified in CI. |
