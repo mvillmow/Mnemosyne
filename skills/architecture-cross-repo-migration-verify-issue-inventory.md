@@ -1,13 +1,13 @@
 ---
 name: architecture-cross-repo-migration-verify-issue-inventory
-description: "Cross-repo/submodule migrations: verify a GitHub issue's file inventory and ADR cross-references against disk BEFORE the move, and sweep every orphaned CONSUMER (validators, tests, entry points, hooks, workflows, docs, frozen-count guards) AFTER the move — a migration isn't done when the source moves, it's done when every consumer is reconciled. Use when: (1) planning a file/package move named in an issue, (2) the move crosses submodule or repo boundaries, (3) the issue cites ADRs or file/test counts, (4) the destination repo's language/packaging capability is assumed, (5) you just removed migrated source and need main to stay green."
+description: "Cross-repo/submodule migrations: verify a GitHub issue's file inventory and ADR cross-references against disk BEFORE the move, sweep every orphaned CONSUMER after it, and reconcile scanner alerts against the exact retired-path inventory without dismissing unverified findings. Use when: (1) planning a file/package move named in an issue, (2) the move crosses submodule or repo boundaries, (3) the issue cites ADRs or file/test counts, (4) the destination repo's language/packaging capability is assumed, (5) you removed a local plugin distribution but hosted scanner alerts still name its historical paths."
 category: architecture
-date: 2026-07-11
-version: "1.1.0"
+date: 2026-07-26
+version: "1.2.0"
 user-invocable: false
 verification: verified-ci
 history: architecture-cross-repo-migration-verify-issue-inventory.history
-tags: [cross-repo, submodule, migration, planning, issue-inventory, stale-docs, adr, ground-truth, git-history, nats-contract, orphan-consumers, dangling-references, frozen-count-assertions, tree-wide-guards, entry-points, precommit-hooks, ci-workflows, incomplete-migration]
+tags: [cross-repo, submodule, migration, planning, issue-inventory, stale-docs, adr, ground-truth, git-history, nats-contract, orphan-consumers, dangling-references, frozen-count-assertions, tree-wide-guards, entry-points, precommit-hooks, ci-workflows, incomplete-migration, plugin-scanner, code-scanning-alerts, retired-plugin-roots, fail-closed-inventory]
 ---
 
 # Cross-Repo Migration: Verify Issue Inventory Before Planning
@@ -17,9 +17,9 @@ tags: [cross-repo, submodule, migration, planning, issue-inventory, stale-docs, 
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-06-20 |
-| **Objective** | Two halves of one lifecycle: (a) plan a Python-layer move from ProjectKeystone→ProjectAgamemnon across submodule boundaries (issue #143); (b) execute a real cross-repo surface migration (ProjectHephaestus ADR-016 / #2063 — move skills/, plugins/, .claude-plugin/, .codex-plugin/, .agents/, assets/ out to a new "Athena" repo) and keep `main` green. |
-| **Outcome** | (a) The issue's inventory/counts/ADR diverged from disk; the plan was rebuilt from verified ground truth. (b) Removing the source dirs alone turned `main` RED — every orphaned CONSUMER still referenced the moved surface; the systematic sweep (PR #2070, merged `7cc097d6`) reconciled all of them and main returned to green. |
-| **Verification** | verified-ci — the post-move orphan-consumer sweep was executed end-to-end; PR #2070 merged as `7cc097d6`, main returned to green, subsequent PRs merged cleanly. (The pre-move inventory-check half remains a planning-derived hypothesis.) |
+| **Objective** | Cover the full migration lifecycle: verify the source inventory before a cross-repo move, reconcile every consumer after it, and retire stale scanner findings against exact historical paths without weakening the destination or manually dismissing alerts. |
+| **Outcome** | (a) The issue's inventory/counts/ADR diverged from disk; the plan was rebuilt from verified ground truth. (b) Removing Hephaestus's migrated plugin source dirs alone turned `main` RED; PR #2070 reconciled orphaned consumers and restored green. (c) Issue #2255 supplied a proposed follow-up contract for 58 hosted findings against the retired roots; implementation and a fresh default-branch scan remain pending. |
+| **Verification** | Mixed: the post-move orphan-consumer sweep is verified-ci (PR #2070, merged `7cc097d6`); the pre-move inventory check and #2255 scanner-alert closure workflow are proposed/unverified. |
 | **History** | [changelog](./architecture-cross-repo-migration-verify-issue-inventory.history) |
 
 ## When to Use
@@ -32,6 +32,12 @@ tags: [cross-repo, submodule, migration, planning, issue-inventory, stale-docs, 
 - A public string-literal contract (NATS subject, wire field) sits inside code that is being moved or renamed.
 - **You just removed the migrated source directories and need `main` to stay green** — a migration is only done when every CONSUMER (validators, tests, entry points, pre-commit hooks, CI workflows, docs, frozen-count/membership guards, whole test dirs) is reconciled, not when the source moves.
 - A repo has "frozen" guards that assert a NUMBER (console-script count, symbol count) or a membership SET (sanctioned-dir allowlist, phantom-dir guard) — these silently encode the old surface and won't be caught by grepping for module names.
+- A hosted scanner still reports findings under plugin roots that were deliberately removed
+  during a cross-repo migration.
+- You must prove that a retired local distribution stays absent while repository-level metadata
+  stays at the root and runtime configuration points to an external marketplace.
+- An alert batch has a claimed historical count/path mapping that must be reconciled exactly
+  before accepting automatic scanner closure.
 
 ## Proposed Workflow
 
@@ -65,6 +71,65 @@ Treat the issue body's file inventory and ADR cross-references as a **hypothesis
 4. **Verify the destination's build system/language/packaging before assuming "just add the package."** ProjectAgamemnon had ZERO Python (no `pyproject.toml`, no `[pypi-dependencies]` in `pixi.toml`, `src/` all `.cpp`) — so this was a from-scratch bootstrap, not an edit.
 5. **Explicitly flag cross-repo history as NOT preserved by plain `git mv`.** `git mv` preserves `git log --follow` only WITHIN one repo. Keystone and Agamemnon are independent repos (submodules), so a copy-in + provenance commit does not give `--follow` across the boundary. True preservation needs `git filter-repo`/subtree — left out of scope, so flag it as the top unverified risk.
 6. **Identify public string-literal contracts and add a grep-guard.** The NATS subject literal `hi.tasks.{team_id}.{task_id}.{event}` / `"hi.tasks.>"` must survive byte-for-byte (downstream Argus/AI-Maestro must not redeploy), and the dot-count parse arithmetic in `_parse_subject` must not change (`hi.tasks.team.task.event` = 5 parts). Guard these separately from the identifier rename.
+
+### After retirement: reconcile hosted scanner alerts without dismissal
+
+> **Warning:** This workflow is proposed from ProjectHephaestus issue #2255. It
+> has not been executed end-to-end, merged, or confirmed by a fresh
+> default-branch scan.
+
+1. **Collect the live open-alert inventory before editing.** Filter by the exact
+   scanner tool and save the evidence outside source paths. Fail closed unless
+   every expected rule count and historical path is present. A claimed total is
+   not enough: compare the full multiset of `(rule, path)` pairs.
+2. **Reconcile repeated findings as a Cartesian product.** When a migrated
+   distribution historically shipped the same payload at two roots, construct
+   `expected_names × expected_roots` and compare the sorted paths for equality.
+   This detects a missing expected alert, an unexpected extra skill, or a third
+   scanner root that a count-only check hides.
+3. **Reconcile singleton and doubled interface findings separately.** Manifest
+   rules should map to the exact retired manifest paths; missing repository-file
+   rules should map to the exact nested plugin-root paths. Do not combine them
+   into one loose total.
+4. **Encode the current topology, not the old payload.** Add a repository
+   regression test that keeps every retired local plugin root absent, requires
+   repository metadata at the real repository root, and parses the local runtime
+   configuration to prove skills are enabled from the external marketplace.
+   Marketplace configuration proves runtime sourcing; it does not itself clear
+   findings in the source repository.
+5. **Run the scanner against the source repository checkout.** Require zero
+   current-checkout findings for the issue's exact rule set. Do not scan the
+   destination marketplace and treat that as evidence about the source repo.
+6. **Merge through the repository's normal protected workflow.** Then trigger
+   the existing organization-managed scanner against the merged default branch.
+   Do not add a repository workflow or scanner dependency solely to force this
+   housekeeping rescan.
+7. **Let a fresh authoritative scan close stale alerts.** Never manually dismiss
+   an alert merely because its path is absent locally. If any matching alert
+   survives or reappears, preserve it and investigate its live ref, path,
+   category, configured root, and scan provenance.
+
+### Scanner Alert Quick Reference
+
+```bash
+# Collect one scanner's open hosted findings as a single array.
+mkdir -p build
+gh api --paginate --slurp \
+  "repos/<owner>/<source-repo>/code-scanning/alerts?state=open&tool_name=<scanner>&per_page=100" \
+  > build/alert-pages.json
+
+# Current-checkout proof must run from the SOURCE repository root.
+plugin-scanner scan . --format json > build/plugin-scan.json
+jq -e --argjson rules '["RULE_A", "RULE_B"]' \
+  '[.findings[]? | select(.rule_id as $id | $rules | index($id))] | length == 0' \
+  build/plugin-scan.json
+
+# After merge/rescan, query the same source repository and exact rule set.
+gh api --paginate --slurp \
+  "repos/<owner>/<source-repo>/code-scanning/alerts?state=open&tool_name=<scanner>&per_page=100" |
+jq -e --argjson rules '["RULE_A", "RULE_B"]' \
+  'add | [.[] | select(.rule.id as $id | $rules | index($id))] | length == 0'
+```
 
 ## Verified Workflow
 
@@ -153,6 +218,9 @@ pixi run mypy && pixi run pytest tests/unit
 | 6 | (ADR-016) Removed the migrated source dirs (`skills/`, `plugins/`, validators) and considered the migration done. | `main` went RED — consumers still referenced the moved surface: validators importing deleted modules, tests importing deleted validators, pre-commit hooks invoking deleted scripts, a workflow scanning the deleted plugin surface, entry points pointing at deleted modules, docs counting the old surface. | A migration isn't done when the SOURCE moves; it's done when every CONSUMER is reconciled. Sweep modules, tests, entry points, hooks, workflows, docs, allowlists, and whole test dirs. |
 | 7 | Grepped only for the deleted module identifiers to find the fallout. | Missed the frozen COUNT/membership assertions: the console-script count a test freezes (53→51) and `SANCTIONED_EXTRA_TEST_DIRS` still listing `"plugins"` (which then tripped a separate phantom-test-dir guard). | Guards that assert a NUMBER or a SET, not a name, silently encode the old surface. Search for count/membership assertions explicitly, not just module names. |
 | 8 | Ran tests only on the edited files to confirm the removal. | Tree-wide guards (whole-tree `mypy`, structure tests, phantom-dir guard) failed elsewhere — the break was far from the deletion. | Run the FULL suite locally after a migration; tree-wide guards fail far from the change, so a changed-files-only run reports false-green. |
+| 9 | Treated the aggregate alert count as sufficient evidence. | A total can still hide a missing expected path, an unexpected extra path, or a scanner rooted at a third location. | Fail closed on the exact `(rule, path)` inventory; model duplicated payloads as `names × historical roots`. |
+| 10 | Proposed proving source-repository cleanup by inspecting or modifying the destination marketplace. | Destination metadata does not determine which paths a scanner analyzed in the source repository. | Keep remediation and scanner execution in the source repo; use external marketplace config only as a runtime-topology assertion. |
+| 11 | Considered manually dismissing alerts once their historical paths disappeared. | Path absence does not prove which ref, category, or configured root produced the hosted result. | Require a fresh authoritative default-branch scan; investigate surviving alerts and never dismiss them without verified provenance. |
 
 ## Results & Parameters
 
@@ -202,6 +270,74 @@ grep -rln 'maestro\|Maestro' <src>/src <src>/tests --include='*.py'   # expect: 
 | Test-infra allowlist | `SANCTIONED_EXTRA_TEST_DIRS` still listed `"plugins"`; a phantom-test-dir guard then failed | Removed the `"plugins"` entry |
 | Whole test dir | `tests/unit/plugins/` | Removed the directory |
 
+### ProjectHephaestus #2255 proposed alert inventory
+
+The issue's historical inventory is intentionally exact. The 46 license
+findings are the Cartesian product of these 23 skill names and two retired
+roots:
+
+```text
+skill-advisor
+advise
+learn
+myrmidon-swarm
+brainstorm
+test-driven-development
+systematic-debugging
+verification
+git-worktrees
+finish-branch
+code-review
+repo-analyze
+repo-analyze-quick
+repo-analyze-strict
+repo-analyze-full
+repo-analyze-quick-full
+repo-analyze-strict-full
+review-pr-strict
+worktree-cleanup
+tidy
+create-reusable-utilities
+github-actions-python-cicd
+python-repo-modernization
+```
+
+```text
+skills/<skill>/SKILL.md
+plugins/hephaestus/skills/<skill>/SKILL.md
+```
+
+Each of four interface rules is expected exactly twice, once at each retired
+manifest:
+
+```text
+.codex-plugin/plugin.json
+plugins/hephaestus/.codex-plugin/plugin.json
+```
+
+The remaining singleton rules map one-to-one to:
+
+```text
+plugins/hephaestus/SECURITY.md
+plugins/hephaestus/README.md
+plugins/hephaestus/LICENSE
+plugins/hephaestus/.codexignore
+```
+
+The nine-rule acceptance set is:
+
+```text
+MANIFEST_MISSING_LICENSE
+PLUGIN_JSON_INTERFACE_ASSET_LOGO
+PLUGIN_JSON_INTERFACE_ASSET_PRIVACYPOLICYURL
+PLUGIN_JSON_INTERFACE_ASSET_SCREENSHOTS
+PLUGIN_JSON_INTERFACE_ASSET_TERMSOFSERVICEURL
+SECURITY_MD_MISSING
+README_MISSING
+LICENSE_MISSING
+CODEXIGNORE_MISSING
+```
+
 ## Verified On
 
 | Field | Value |
@@ -215,3 +351,7 @@ grep -rln 'maestro\|Maestro' <src>/src <src>/tests --include='*.py'   # expect: 
 | Destination repo (b) | Athena (new repo receiving the skill/plugin surface) |
 | Trigger (b) | Post-move orphan-consumer sweep — PR #2070, merged as commit `7cc097d6` |
 | Verification (b) | verified-ci — main returned to green; subsequent PRs merged cleanly |
+| Source repo (c) | ProjectHephaestus issue #2255 |
+| Destination repo (c) | Athena, configuration reference only; no destination change proposed |
+| Trigger (c) | Reconcile 58 hosted plugin-scanner findings against retired local plugin roots |
+| Verification (c) | unverified — implementation, local plugin-scanner run, merge, organization-managed rescan, and hosted-alert closure are pending |
