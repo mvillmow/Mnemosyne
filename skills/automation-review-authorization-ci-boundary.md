@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Keep automation-loop source-review authorization independent of CI/CD and preserve adopted PR branches through detached review. Use when: (1) review approval must bind to an exact head, (2) a clean detached worktree may contain an agent-precommitted fix, (3) an adopted PR head is confused with a disposable branch reservation, (4) repeated NOGO rounds need fail-closed evidence handling before merge, (5) a later finding must retract an earlier GO, or (6) merge-wait must consume only current-head approval."
+description: "Keep automation-loop source-review authorization independent of CI/CD and preserve adopted PR branches through detached review. Use when: (1) review approval must bind to an exact head, (2) a clean detached worktree may contain an agent-precommitted fix, (3) an adopted PR head is confused with a disposable branch reservation, (4) repeated NOGO rounds need fail-closed evidence handling before merge, (5) a later finding must retract an earlier GO, (6) merge-wait must consume only current-head approval, (7) generated PR handoffs must be factual and deterministic, or (8) host validation failures must route to remediation without masking runner faults."
 category: architecture
-date: 2026-08-03
-version: "1.7.0"
+date: 2026-08-04
+version: "1.8.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -23,6 +23,10 @@ tags:
   - adopted-pr-branch
   - iterative-review
   - review-batch
+  - pr-handoff
+  - test-receipt
+  - validation-classification
+  - ruff-format
 ---
 
 # Automation Review Authorization: CI Boundary
@@ -31,10 +35,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-03 |
+| **Date** | 2026-08-04 |
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce exact-head review/merge progression across repeated remediation rounds. |
-| **Outcome** | ProjectHephaestus PR #2596 added a verified iterative path to the detached-review contract: five initial findings produced NOGO, an addressed review produced GO, a later `create_pr` finding retracted GO to NOGO, and final exact-head merge-wait restored GO and merged the reviewed head. |
-| **Verification** | verified-ci — PR #2596's final reviewed head was `81331951`; GO was recorded at `02:30:28Z`, NOGO was removed at `02:30:30Z`, required checks completed, and merge commit `57468dfe` landed at `02:40:49Z`; review authorization remained source-review-only. |
+| **Outcome** | ProjectHephaestus PR #2614 added a verified handoff-evidence contract: host-generated PR text excludes agent-local state, changed unit-test receipts bind to the new side of the exact diff, and Ruff format output routes to implementation remediation. The PR then followed the current-head review, required-check, and merge-wait path. |
+| **Verification** | verified-ci — PR #2614's final head was `c1d1b6df`; required checks passed and merge commit `375852c3` landed at `2026-08-04T09:17:20Z`. |
 
 ## When to Use
 
@@ -48,6 +52,9 @@ tags:
 - A downstream rerun evaluates a PR after merge and must short-circuit on PR state instead of expecting `autoMergeRequest` to still be present; GitHub clears `autoMergeRequest` on merged PRs.
 - A `merge_wait` poll sees implementation approval missing and must distinguish a current-run arm from an externally armed PR before choosing fail-back, blocking, or terminal containment.
 - A PR has repeated NOGO reviews involving unproven test claims, stale heads, or environment-sensitive integration validation and must not advance to merge on prose alone.
+- A generated PR title/body could contain agent-supplied summaries, absolute worktree paths, stale working-tree claims, or unsupported test totals.
+- A Python PR review needs a bounded pytest receipt for changed unit tests, tied to the new side of the diff and excluding deleted or non-hermetic verifier tests.
+- Ruff format reports `unformatted:` or `N files would be reformatted`, and the result must route to implementation remediation rather than be classified as a host/runner fault.
 - A detached adopted-PR review returns a clean worktree and the coordinator must distinguish “no change” from “the address agent already committed the change.”
 - A commit/push helper receives both `publish_detached_head=True` and `expected_remote_sha`; the latter is a publication lease for the reviewed PR head, not ownership of a disposable branch reservation.
 - A PR needs several review/address rounds; a later finding or head change must invalidate earlier authorization.
@@ -82,6 +89,13 @@ lost approval during merge-wait polling
   2. current-run arm: disable it, re-read to confirm it is gone, then FAIL_BACK not_implementation_go
   3. external arm: return BLOCKED without mutation or PR-review routing
   4. if disarm cannot be confirmed, terminalize containment failure; never review or merge with a live arm
+
+review handoff evidence
+  1. derive PR text from host-owned facts; keep summaries deterministic, repo-relative, and command-level
+  2. bind bounded pytest receipts to changed new-side unit-test paths on the reviewed head
+  3. exclude deleted paths and non-hermetic host-verifier tests from that receipt plan
+  4. classify Ruff format output as validation remediation; keep bootstrap/sandbox failures fail-closed
+  5. re-review and merge only the resulting exact head
 
 CI/CD is outside this decision:
   - do not query checks, workflow runs, artifacts, or deployments
@@ -126,6 +140,12 @@ CI/CD is outside this decision:
 
 15. Revoke review proof when a correction changes the head. Re-review the new exact head, confirm the complete thread state, and only then apply `state:implementation-go`. PR #2508 moved from an earlier reviewed head to `55300bb4` after the clean-worktree ambiguity was found; the final audit, label, and conditional merge all targeted that corrected head. Passing CI on the final head was merge-readiness evidence, not the source-review authorization.
 
+16. Treat the generated PR handoff as a host-owned journal, not an agent transcript. Use a deterministic conventional title, a stable summary, repo-relative change references, command-level testing facts, and the exact `Closes #N` line. Do not persist agent summaries containing local paths, stale “uncommitted” claims, or unsupported suite totals.
+
+17. Make review test evidence both bounded and head-bound. Derive changed unit-test receipts from real diff headers and the new-side `+++` path; skip `/dev/null` deletions and known non-hermetic verifier tests. Run each selected test file with a bounded command such as `uv run pytest -o addopts= <path> -q --tb=short`, then attach the receipt to the checked-out review head before the primary reviewer runs.
+
+18. Classify tool output by meaning, not only exit code. Ruff format exit 1 with `unformatted:` or `<N> files would be reformatted` is an implementation validation failure and should route back to remediation. Missing tools, bootstrap failures, sandbox denials, and other host failures remain fail-closed and must not be presented as code findings.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -146,6 +166,9 @@ CI/CD is outside this decision:
 | Reuse direct-scope reservation cleanup for an adopted PR | A zero-ahead clean review routed `expected_remote_sha` through `delete_reserved_branch_if_unchanged`. | In detached review, that SHA identifies the adopted open PR head; successful cleanup would delete the contributor's remote branch. | Treat the reviewed SHA as a publication lease in detached mode. Zero-ahead means no publication and no deletion. |
 | Let a prior GO survive a later review finding | PR #2596 reached GO after the first five findings were addressed, then a later review found a remaining `create_pr` title-normalization gap | The earlier authorization no longer described the complete implementation or final review state | Retract GO to NOGO, address the finding, and run a fresh exact-head review before restoring GO |
 | Rewrite accepted ADRs to remove obsolete instructions | Historical ADR text was modified in place. | It obscured the decision record and broke the repository's ADR immutability convention. | Preserve accepted ADRs verbatim; add a superseding ADR and make the index point to the active policy. |
+| Reuse the agent's implementation summary in the PR body | A generated handoff copied the implementer's summary, including an absolute worktree path, a stale uncommitted-change claim, and an unsupported full-suite total. | Agent-local state is not a durable fact about the pushed PR head and can mislead the reviewer. | Generate the handoff from host-owned deterministic facts; keep the diff as the source of implementation detail. |
+| Run one broad pytest receipt for every changed test path | The review receipt plan used all diff-header paths, including deleted tests and the non-hermetic worker-pool verifier test. | Deleted paths cannot run, and nested verifier execution produces runner failures instead of code evidence. | Parse new-side paths, omit `/dev/null`, and exclude the explicitly non-hermetic verifier suite. |
+| Treat every Ruff format exit 1 as a host failure | Output such as `unformatted:` and `3 files would be reformatted` was classified as a runner fault. | The formatter executed successfully and reported an actionable code-format defect; terminalizing the item skipped remediation. | Match known Ruff format diagnostics as `validation`; keep bootstrap and sandbox failures fail-closed. |
 
 ## Results & Parameters
 
@@ -167,6 +190,10 @@ CI/CD is outside this decision:
 | PR #2596 audit | Reviews crossed exact heads `29b1f41b`, `d5f9307a`, `a4624238`, and `81331951`; the loop recorded NOGO → GO → NOGO → GO. The required-checks gate completed at `02:40:10Z` after final GO at `02:30:28Z`, and merge commit `57468dfe` followed at `02:40:49Z`. |
 | CI boundary | Required checks supplied merge eligibility only; review comments and grades remained non-authorizing evidence. |
 | Historical-policy migration | Preserve accepted ADRs; record the new label-only rule in a superseding ADR and its index entry. |
+| PR handoff summary | Host-generated deterministic summary; never copy agent-local paths, uncommitted-state claims, or unsupported test totals. |
+| Changed-test receipt | One bounded `uv run pytest -o addopts= <new-side tests/unit path> -q --tb=short` receipt per changed, non-deleted, hermetic unit-test file. |
+| Format classification | Ruff format exit 1 with `unformatted:` or `<N> files would be reformatted` → `validation` → implementation remediation; bootstrap/sandbox faults remain fail-closed. |
+| PR #2614 audit | Final head `c1d1b6df`; pre-push receipt `7152 passed, 11 skipped, 5 deselected; 84.74% coverage`; required checks passed; merge commit `375852c3`. |
 
 ## Verified On
 
@@ -178,3 +205,4 @@ CI/CD is outside this decision:
 | ProjectHephaestus | PR #2344 / issue #2232 | Repeated NOGO reviews stayed fail-closed: unproven “6474 passed” prose, read-only inability to run the writable-temp integration test, an ambient Git config injection hazard, and Ruff formatting were treated as blockers. After fixes and current-head required checks passed, the PR completed the normal review/label/merge path at `2026-07-27T09:42:33Z` with merge commit `03e31fcd4e0af48ab5ccdbabda2b40c9b460fa3c`. Verified in CI. |
 | ProjectHephaestus | PR #2508 / issue #2507 | A review correction distinguished two clean detached states: unchanged reviewed head (no publish, no branch release) and agent-precommitted head (publish exact `HEAD` through the reviewed-SHA lease). The corrected head `55300bb4` passed required checks, received a fresh current-head review and `state:implementation-go`, then merged as `6a3cb437`. Verified in CI. |
 | ProjectHephaestus | Issue #2157 / PR #2596 | Verified-ci iterative review/merge path. Five initial findings produced NOGO; an addressed review produced GO; a later `create_pr` finding retracted GO to NOGO; final exact-head review restored GO, required checks completed, and merge-wait produced `57468dfe`. |
+| ProjectHephaestus | Issue #2613 / PR #2614 | Verified-ci handoff path. Host-owned PR text removed agent-local summaries; changed unit-test pytest receipts used new-side diff markers and excluded deleted/non-hermetic tests; Ruff format diagnostics became remediation validation. Final head `c1d1b6df` passed required checks and merge-wait produced `375852c3`. |
