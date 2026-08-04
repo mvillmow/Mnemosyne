@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Keep automation-loop source-review authorization independent of CI/CD and bind direct-PR review to metadata-only admission plus an exact head. Use when: (1) strict review is mistakenly delegated to CI, (2) a direct --prs seed still expects a retired remote diff, (3) review can race with a changed head, (4) review prose or CI is being treated as merge authorization, or (5) a downstream rerun sees a merged PR."
+description: "Keep automation-loop source-review authorization independent of CI/CD and bind direct-PR review to metadata-only admission plus an exact head. Use when: (1) strict review is mistakenly delegated to CI, (2) a direct --prs seed still expects a retired remote diff, (3) review can race with a changed head, (4) review prose or CI is being treated as merge authorization, (5) repeated NOGO rounds need fail-closed evidence handling, or (6) a later finding must retract an earlier GO before exact-head merge-wait."
 category: architecture
 date: 2026-08-03
-version: "2.1.0"
+version: "2.2.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -21,6 +21,8 @@ tags:
   - merge-wait
   - exact-head-merge
   - fail-closed
+  - iterative-review
+  - review-batch
 ---
 
 # Automation Review Authorization: CI Boundary
@@ -29,10 +31,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-07-25 |
-| **Objective** | Keep strict source-review authorization in the automation loop, ensure direct PR admission carries only stable metadata until an exact-head checkout derives the diff, and bind merge-wait to that reviewed head. |
-| **Outcome** | ProjectHephaestus issue #2448 / PR #2449 fixed a stale direct-seed lookup of the retired `pr_diff` field. Issue #1950 / PR #2590 added direct-issue context hydration; its merged path still required the final exact-head review, loop-owned GO transition, independent checks, and exact-head merge-wait. |
-| **Verification** | verified-ci — PR #2449's required checks passed, including `pr-policy`, unit/integration tests, lint, build, and security checks; it merged as `35175ab1` on 2026-07-25. |
+| **Date** | 2026-08-03 |
+| **Objective** | Keep strict source-review authorization in the automation loop, ensure direct PR admission carries only stable metadata until an exact-head checkout derives the diff, and require each review/address round to re-authorize the final head before merge-wait. |
+| **Outcome** | ProjectHephaestus issue #2157 / PR #2596 demonstrated the iterative fail-closed path: five initial major findings led to NOGO, an addressed review led to GO, a later finding retracted GO to NOGO, and a final exact-head review led to GO before merge-wait. |
+| **Verification** | verified-ci — the final review targeted head `81331951`; GO was recorded at `02:30:28Z`, NOGO was removed at `02:30:30Z`, required checks completed, and merge commit `57468dfe` landed at `02:40:49Z`. |
 | **History** | [changelog](./automation-review-authorization-ci-boundary.history) |
 
 ## When to Use
@@ -44,6 +46,8 @@ tags:
 - `merge_wait` must decide whether a label is usable after a refresh, restart, or head change.
 - A downstream rerun sees a merged PR and incorrectly expects `autoMergeRequest` or an open-PR review path.
 - A direct issue seed can reach planning/review with missing or placeholder title/body context; exact-head review is not sufficient if the artifact was evaluated against the wrong requirements.
+- A PR needs multiple review/address rounds and each later finding must invalidate earlier authorization.
+- A completed run needs an event audit that separates review evidence, GO/NOGO label transitions, required checks, and the final merge.
 
 ## Verified Workflow
 
@@ -58,12 +62,14 @@ loop-owned review authorization
   3. Run strict source review in the loop; unavailable GitHub facts are a block/retry,
      not a label decision.
   4. Require explicit GO plus fresh live PR state and an exact reviewed-head match.
-  5. Apply `state:implementation-go` and verify the exclusive label/readback.
+  5. Treat each address/review batch as a fresh authorization attempt; retract GO to NOGO
+     when a later finding or head change invalidates the prior review.
+  6. Apply `state:implementation-go` and verify the exclusive label/readback.
 
 exact-head merge path
-  6. `merge_wait` consumes only the process-local reviewed-head proof and conditionally
+  7. `merge_wait` consumes only the process-local reviewed-head proof and conditionally
      merges that exact head. It does not mutate native auto-merge.
-  7. On head drift, missing proof, or merged state, route/reclassify from fresh live state;
+  8. On head drift, missing proof, or merged state, route/reclassify from fresh live state;
      never reuse stale review evidence.
 
 CI/CD remains independent: checks may validate the PR, but they do not authorize the loop.
@@ -97,6 +103,11 @@ CI/CD remains independent: checks may validate the PR, but they do not authorize
    explicit GO and successful structural/thread checks; verify the exclusive label state by
    readback. Required CI checks remain independent validation context.
 
+   A prior GO is not terminal: if a later review cycle finds another major issue, retract
+   `state:implementation-go`, apply NOGO, and repeat the addressed-head review. In PR #2596,
+   the initial five findings were addressed before GO, then a later `create_pr` finding forced
+   another NOGO before final head `81331951` was reviewed and authorized.
+
 6. Keep the reviewed-head proof in active-run memory through the handoff. `merge_wait` must
    reject missing or drifted proof and route back to PR review. With valid proof, use the
    normal conditional merge operation for that exact head; queue stages do not enable,
@@ -119,6 +130,7 @@ CI/CD remains independent: checks may validate the PR, but they do not authorize
 | Review a remotely fetched diff | Passed a mutable remote diff into review before proving the checkout | A concurrent push can pair a stale/intermediate diff with a restored head | The checkout barrier and local base/head diff are the sole review-evidence source |
 | Treat the first review grade as authorization | Accepted a review after GitHub API identity/head facts were unavailable | The first PR #2449 review was an informational `F` because live facts could not be verified; it could not authorize merge | Block or retry on unavailable live facts; only a fresh structural audit can authorize the label |
 | Treat CI or review prose as the merge decision | Used successful checks or an `A` comment as the authority | CI and reviewer prose are evidence; the loop-owned label plus exact reviewed-head proof owns advancement | Keep authorization in the loop and use CI as independent validation |
+| Let a prior GO survive a later review finding | PR #2596 reached GO after the first five findings were addressed, then a later review found a remaining `create_pr` title-normalization gap | The earlier authorization no longer described the complete implementation or final review state | Retract GO to NOGO, address the finding, and run a fresh exact-head review before restoring GO |
 | Reuse authorization after merge or head drift | Let a rerun consume stale approval fields | Merged PRs are no longer open and GitHub can clear `autoMergeRequest`; a changed head invalidates the old review | Re-read terminal state/head and short-circuit or re-review before any merge action |
 
 ## Results & Parameters
@@ -133,6 +145,8 @@ CI/CD remains independent: checks may validate the PR, but they do not authorize
 | Merge result | PR #2449 merged at `2026-07-25T21:54:14Z` as `35175ab159c2b3a0e50681be26e9d8ec6855b92b` |
 | Validation | `uv run --all-extras --locked pytest tests/unit/automation/pipeline -q --no-cov`; `uv run --all-extras --locked pytest tests/unit/automation/test_pipeline_github.py -q --no-cov`; targeted Ruff; pre-push full suite: 6798 passed, 6 skipped, 85.20% coverage |
 | PR #2590 audit | Reviews on `4854a87c`, `76b3420c`, and `717462f5` crossed successive heads. Only the final review matched live head `717462f5`; GO was added at `21:29:07Z`, NOGO was removed at `21:29:09Z`, required checks completed before merge, and merge commit `dad87bbf` landed at `21:35:16Z`. Earlier receipts and CI remained non-authorizing evidence. |
+| PR #2596 audit | Four exact-head review records crossed `29b1f41b`, `d5f9307a`, `a4624238`, and `81331951`. The loop recorded NOGO → GO → NOGO → GO; only the final head reached merge-wait, and merge commit `57468dfe` followed at `02:40:49Z`. |
+| CI boundary | PR #2596's required-checks gate completed at `02:40:10Z`, after final GO at `02:30:28Z`; checks were merge eligibility, not the source-review authorization. |
 
 ## Verified On
 
@@ -140,3 +154,4 @@ CI/CD remains independent: checks may validate the PR, but they do not authorize
 |---------|---------|---------|
 | ProjectHephaestus | Issue #2448 / PR #2449 | Direct metadata-only seed, checkout-derived review diff, live-facts review retry, loop-owned implementation label, and exact-head merge path. Required CI passed and the PR merged. |
 | ProjectHephaestus | Issue #1950 / PR #2590 | Verified-ci direct-issue context and exact-head merge path. Seeded issue title/body context was preserved into planning payloads and fenced prompts; successive reviews on superseded heads did not authorize the final revision. The final review matched `717462f5`, the loop-owned GO label followed, the incompatible NOGO label was removed, required checks completed, and merge commit `dad87bbf` followed. |
+| ProjectHephaestus | Issue #2157 / PR #2596 | Verified-ci iterative review/merge path. Five initial major findings produced NOGO; one addressed review produced GO; a later `create_pr` finding retracted GO to NOGO; the final review matched `81331951`, GO was restored, required checks completed, and merge-wait produced `57468dfe`. |
