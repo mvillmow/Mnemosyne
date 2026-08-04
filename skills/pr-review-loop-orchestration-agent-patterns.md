@@ -2,8 +2,9 @@
 name: pr-review-loop-orchestration-agent-patterns
 description: "Use when: (1) building or debugging a Python implement-review loop where an LLM sub-agent reviews a PR and a fixer agent addresses inline comments, (2) a review loop resolves threads even though no commit was produced — resolution must be gated on a real commit not the model self-report, (3) a loop ends AMBIGUOUS or NO-GO too fast before ever earning an explicit GO verdict, (4) LLM or agent-generated inline PR review comments are rejected by GitHub (HTTP 422) because they do not lie on a changed diff hunk, (5) an agent-driven CI-fix session produces no commit and the PR stays red; the correct response is a single bounded retry with unresolved review threads injected verbatim, (6) a review fix plan file concludes no changes are needed and the automation should self-cancel without opening a new PR, (7) a feature-dev:code-reviewer sub-agent cannot execute shell commands and cannot post gh pr review — wrong agent type was chosen, (8) a GitHub GraphQL PR-review mutation field selection is wrong and the automation loop fails on every call with Field X does not exist, (9) pre-commit must cover the full PR diff from the merge-base not just the most-recent-edit files before pushing, (10) an existing-PR review handler short-circuits NO-GO PRs as if they were settled (idempotency `if has_go or has_no_go: skip`) so a failed-review PR never re-enters the loop — short-circuit on GO ONLY, (11) an existing-PR worktree sync fails `git fetch origin {issue}-auto-impl` with exit 128 because the PR head branch was ASSUMED from the issue number instead of read from the PR's real `headRefName`, (12) an in-loop LLM PR reviewer posts a FALSE policy violation (e.g. `POLICY VIOLATION: Closes, auto-merge-premature, signed-commits` on a PR that actually has `Closes #N`, auto-merge OFF, and a signed commit) because its policy fetch failed open to violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate (`pr-policy` required, `auto-merge-policy` advisory) already enforces, (13) an in-loop implementer review cycle (`_run_impl_review_loop`) converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO instead of re-reviewing up to `MAX_REVIEW_ITERATIONS` and auto-skipping only on TRUE exhaustion, (14) the address-review coordinator is handed a review thread the reviewer itself labels non-blocking / pre-existing / out-of-scope / follow-up-worthy, or that asks for an edit the approved plan explicitly scoped out (e.g. behind a 'count must not increase' verification guard) — the correct disposition is to leave the thread UNADDRESSED (out of the `addressed` set) as a follow-up issue and make NO code change, because resolving a comment means giving it a disposition, not necessarily editing code, (15) a run parks EVERY pr_review item to state:skip via 'zero-thread NOGO retry cap exhausted' or 'exhausted at round N (automation unresolved 0 -> 0)' and you suspect the reviewer model or verdict parsing — check each PR's hephaestus-pr-review-zero-thread-nogo anomaly comment FIRST: a summary like 'NOGO: ... head unchanged (Nth round)' means by-design stale-PR triage (#2079: deterministic no-progress NOGOs escalate to skip instead of burning implement budget), NOT a reviewer failure; only a FRESHLY-implemented PR parked this way indicates a real defect"
 category: ci-cd
-date: 2026-06-12
-version: "1.6.0"
+date: 2026-08-04
+version: "1.7.0"
+verification: verified-ci
 user-invocable: false
 history: pr-review-loop-orchestration-agent-patterns.history
 tags:
@@ -34,6 +35,9 @@ tags:
   - headrefname
   - assumed-branch-name-fetch-128
   - ci-gate-owns-policy
+  - review-merge-audit
+  - implementation-go
+  - merge-wait
   - llm-reviewer-fails-open
   - false-policy-violation
   - pr-policy-gate
@@ -59,11 +63,11 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-06-12 |
+| **Date** | 2026-08-04 |
 | **Objective** | Build and debug a Python implement-review loop that drives LLM sub-agents to review a PR and fix its inline comments, converging on an EVIDENCE-BASED `Verdict: GO`. Covers: commit-gated thread resolution, inline-comment diff-hunk (422) validation, one-shot no-commit retry with unresolved review threads injected, agent-type selection for review tasks, GraphQL field/input validation for PR-review mutations, self-cancelling review plans, full merge-base pre-commit scope, the existing-PR short-circuit being GO-ONLY (NO-GO PRs MUST re-enter the loop), using the PR's real `headRefName` for the worktree instead of an assumed `{issue}-auto-impl`, and the "zero threads != GO" rule applying to the LOOP's TERMINATION condition (a zero-thread non-GO pass RE-REVIEWS up to `MAX_REVIEW_ITERATIONS`; `state:skip` only on TRUE exhaustion). |
 | **Outcome** | Merged across multiple ProjectHephaestus PRs (commit-gate + verdict-GO convergence #1084; inline-comment 422 validation #1043; no-commit retry + thread injection #847; GraphQL field/input validation #906/#1006; existing-PR NO-GO re-review #1104; real PR head-branch resolution #1106; in-loop policy enforcement removed in favor of CI gates #1112; in-loop zero-thread non-GO re-reviews + `state:skip` only on exhaustion #1114) plus ProjectOdyssey and gh-tidy upstream review rounds. |
 | **Verification** | verified-ci |
-| **Version** | 1.5.0 |
+| **Version** | 1.7.0 |
 
 ## When to Use
 
@@ -80,6 +84,7 @@ tags:
 - An in-loop LLM reviewer posts a FALSE policy violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate already enforces.
 - An in-loop implementer review cycle converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO.
 - The address-review coordinator is handed a review thread the reviewer ITSELF labels non-blocking / pre-existing / out-of-scope for #N / follow-up-worthy, or a thread that asks for an edit the approved plan explicitly scoped out (often behind a "count must not increase" verification guard), and the per-comment loop pressure ("every comment MUST be resolved") tempts a fixer-dispatch + code edit.
+- You are auditing a completed run with `COMMENTED` review records, implementation state labels, required checks, and a merge event, and need to separate review evidence, loop authorization, and terminal merge state.
 
 ## Verified Workflow
 
@@ -309,6 +314,23 @@ LLM re-implementation of the same gate is redundant and, because LLM-context
 fetches fail open to "violation", it produces false negatives that block good PRs.
 Enforce policy ONCE, in the deterministic CI gate; let the LLM reviewer judge code
 quality only.
+
+#### Completed review-to-merge audit: issue #2338 / PR #2610
+
+Use live GitHub events to audit a completed run; do not infer authorization from review prose:
+
+1. The first review pass correctly left `state:implementation-no-go`. A later force-push
+   produced the final reviewed head `54099aff8c0b26bfbbd9893828e80275cfae8ba3`.
+2. The second review record was `COMMENTED`, not `APPROVED`, and the loop then added
+   `state:implementation-go` while removing `state:implementation-no-go`. The review
+   state and `reviewDecision` are informational; the loop-owned GO label is the durable
+   authorization.
+3. GO is not a claim that CI is already complete. `merge_wait` must still wait for the
+   independent required checks. For PR #2610, `pr-policy`, `required-checks-gate`, and
+   the full required-check set passed before the PR merged with `autoMergeRequest: null`.
+4. Confirm terminality from the merge event itself: PR #2610 merged normally as squash commit
+   `6de7b802d28532331315e7453c512d7f9cf45144`. A rerun should key off `state=MERGED`, not
+   an approval count or an auto-merge request.
 
 #### Inline-comment diff-hunk 422 validation
 
@@ -623,3 +645,4 @@ mutation {
 | HomericIntelligence/AchaeanFleet | 11 Dependabot PRs, 2026-05-31 | `feature-dev:code-reviewer` read-only blocker discovered; agent-type selection rule |
 | ProjectOdyssey | PR #3343 (issue #3152) / PR #3109 (issue #3033) | Self-cancelling review plan no-op; comprehensive multi-specialist PR review orchestration |
 | gh-tidy (HaywardMorihara/gh-tidy) | PRs #63/#67/#68/#69 | Upstream bash PR review rounds; logic/safety traps (verified-local) |
+| ProjectHephaestus | Issue #2338 / PR #2610 (2026-08-04) | verified-ci; initial NO-GO, force-pushed final head, second informational `COMMENTED` review, loop-owned GO-label handoff, independent required checks, and normal squash merge with no native auto-merge |
