@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, or (7) detached-review publication and handoff evidence must remain head-bound."
+description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, or (8) batched thread replies need replay-safe head and snapshot identity."
 category: architecture
 date: 2026-08-04
-version: "2.0.0"
+version: "2.1.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -33,6 +33,8 @@ tags:
   - github-ruleset
   - required-signatures
   - advisory-check
+  - reply-journal
+  - thread-snapshot
 ---
 
 # Automation Review Authorization: CI Boundary
@@ -45,6 +47,7 @@ tags:
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce exact-head review/merge progression across repeated remediation rounds. |
 | **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. |
 | **Verification** | verified-ci — final review head `76ab9692`; three review threads resolved; required checks green; exclusive GO/NOGO transition completed; merge commit `b9a27e62` landed at `2026-08-04T22:15:59Z`. |
+| **Issue #2361 / PR #2612** | verified-ci — five remediation batches journaled 31 replies against exact heads and thread-snapshot digests. A later same-head review revoked an interim GO. The final review matched `db9bd1ef`; all 37 threads were resolved, GO replaced NOGO, required checks completed, and conditional merge `d9d53fa0` followed with native auto-merge null. |
 
 ## When to Use
 
@@ -69,6 +72,7 @@ tags:
 - A completed run needs an event audit that separates review evidence, GO/NOGO label transitions, required checks, and the final merge.
 - `pr-policy` duplicates a commit-signature check already enforced by an active GitHub ruleset.
 - A required or advisory CI job reports auto-merge state but does not own the loop's GO label or final merge mutation.
+- A remediation round replies to several review threads and its durable handoff must not replay against a changed head or changed thread set.
 
 ## Verified Workflow
 
@@ -108,6 +112,7 @@ review handoff evidence
   3. exclude deleted paths and non-hermetic host-verifier tests from that receipt plan
   4. classify Ruff format output as validation remediation; keep bootstrap/sandbox failures fail-closed
   5. re-review and merge only the resulting exact head
+  6. journal batched thread replies with PR number, head SHA, unique batch nonce, reply map, and thread-snapshot digest
 
 review revival and slow-check merge
   1. treat `state:skip` or exhausted unresolved rounds as containment, never approval
@@ -132,7 +137,9 @@ CI/CD is outside the source-review decision:
    Treat each addressed review batch as a fresh authorization attempt. If a later review finds
    another major issue, retract `state:implementation-go`, apply NOGO, and repeat the exact-head
    review; do not carry the earlier GO into merge-wait. PR #2596 followed NOGO → GO → NOGO → GO,
-   with final head `81331951` as the only revision authorized for merge.
+   with final head `81331951` as the only revision authorized for merge. PR #2612 additionally
+   showed that a later review on the same head can invalidate a transient GO; label exclusivity
+   must return to NOGO until another exact-head review authorizes progression.
 
 4. After the label's post-write current-head confirmation, retain one process-local reviewed-head receipt for `merge_wait`; discard verdict prose, grades, artifacts, leases, and aliases. The receipt is deliberately non-durable: restart, refresh, checkout mismatch, or head drift routes back to fresh review even when the durable GO label remains.
 
@@ -179,6 +186,12 @@ CI/CD is outside the source-review decision:
     review proof and wait for the repository's normal merge requirements; the delayed checks
     establish merge eligibility, not source-review authorization.
 
+21. Persist a batched thread-reply handoff as structured identity, not free-form completion prose.
+    Record `pr_number`, `head_sha`, a unique `batch_nonce`, the thread-ID-to-reply map, and
+    `thread_snapshot_sha256`. Replay only when the live PR, head, and thread snapshot still match.
+    PR #2612 used five such batches across changing heads; the final batch remained review input,
+    not authorization, until the matching final-head review completed with zero unresolved threads.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -198,6 +211,7 @@ CI/CD is outside the source-review decision:
 | Treat a clean detached worktree as “no fix” | Publication logic relied only on whether `commit_if_changes()` created a commit. | An address agent can commit its own fix, leaving the worktree clean while `HEAD` is ahead of the reviewed remote SHA. | After handling dirty changes, compare `expected_remote_sha..HEAD`; publish the exact detached head whenever it is ahead. |
 | Reuse direct-scope reservation cleanup for an adopted PR | A zero-ahead clean review routed `expected_remote_sha` through `delete_reserved_branch_if_unchanged`. | In detached review, that SHA identifies the adopted open PR head; successful cleanup would delete the contributor's remote branch. | Treat the reviewed SHA as a publication lease in detached mode. Zero-ahead means no publication and no deletion. |
 | Let a prior GO survive a later review finding | PR #2596 reached GO after the first five findings were addressed, then a later review found a remaining `create_pr` title-normalization gap | The earlier authorization no longer described the complete implementation or final review state | Retract GO to NOGO, address the finding, and run a fresh exact-head review before restoring GO |
+| Replay a reply batch from prose alone | A prior remediation comment still looked complete after the PR head or thread set changed. | Its replies described a superseded review snapshot and could skip current-thread disposition. | Bind the journal to PR number, exact head, unique batch nonce, reply map, and thread-snapshot digest; mismatches require a fresh batch. |
 | Rewrite accepted ADRs to remove obsolete instructions | Historical ADR text was modified in place. | It obscured the decision record and broke the repository's ADR immutability convention. | Preserve accepted ADRs verbatim; add a superseding ADR and make the index point to the active policy. |
 | Reuse the agent's implementation summary in the PR body | A generated handoff copied the implementer's summary, including an absolute worktree path, a stale uncommitted-change claim, and an unsupported full-suite total. | Agent-local state is not a durable fact about the pushed PR head and can mislead the reviewer. | Generate the handoff from host-owned deterministic facts; keep the diff as the source of implementation detail. |
 | Run one broad pytest receipt for every changed test path | The review receipt plan used all diff-header paths, including deleted tests and the non-hermetic worker-pool verifier test. | Deleted paths cannot run, and nested verifier execution produces runner failures instead of code evidence. | Parse new-side paths, omit `/dev/null`, and exclude the explicitly non-hermetic verifier suite. |
@@ -232,6 +246,8 @@ CI/CD is outside the source-review decision:
 | PR #2614 audit | Final head `c1d1b6df`; pre-push receipt `7152 passed, 11 skipped, 5 deselected; 84.74% coverage`; required checks passed; merge commit `375852c3`. |
 | PR #2602 / issue #2284 audit | Earlier review/skip state was not reused. Final replies were attached to head `0674b3f2dab6bf5eacc316d83cbe68395ea7539a`; GO was labeled at `18:59:11Z`, slow unit checks completed by `19:06:55Z`, `required-checks-gate` passed at `19:07:04Z`, and conditional merge commit `2232cc42` landed at `19:07:16Z`. |
 | PR #2604 / issue #2330 audit | Earlier review head `9275b973` produced NOGO. Final review bound to `76ab9692` at `22:10:45Z`; all 3 threads were resolved; `required-checks-gate` passed at `22:15:13Z`; GO was applied at `22:15:46Z`, NOGO removed at `22:15:48Z`, and conditional merge `b9a27e62` followed at `22:15:59Z`. The active ruleset still enforced `required_signatures` and required `pr-policy`; native auto-merge was absent. |
+| Reply batch identity | `pr_number` + `head_sha` + unique `batch_nonce` + thread-ID-to-reply map + `thread_snapshot_sha256`; any PR, head, or snapshot mismatch invalidates replay. |
+| PR #2612 / issue #2361 audit | Five head-bound batches covered 31 replies across changing revisions. A same-head follow-up review replaced interim GO with NOGO. The final review targeted `db9bd1ef`; all 37 threads were resolved, GO replaced NOGO at `01:19:49Z` / `01:19:51Z`, `required-checks-gate` completed at `01:26:15Z`, and conditional merge `d9d53fa0` followed at `01:27:15Z`; native auto-merge was null. |
 
 ## Verified On
 
@@ -245,3 +261,4 @@ CI/CD is outside the source-review decision:
 | ProjectHephaestus | Issue #2613 / PR #2614 | Verified-ci handoff path. Host-owned PR text removed agent-local summaries; changed unit-test pytest receipts used new-side diff markers and excluded deleted/non-hermetic tests; Ruff format diagnostics became remediation validation. Final head `c1d1b6df` passed required checks and merge-wait produced `375852c3`. |
 | ProjectHephaestus | Issue #2284 / PR #2602 | Verified-ci review revival and merge-wait path. Earlier no-go/skip state and a no-commit reply did not authorize the PR; a fresh review bound GO to final head `0674b3f2`, required checks completed afterward, and merge-wait produced `2232cc42`. |
 | ProjectHephaestus | Issue #2330 / PR #2604 | Verified-ci policy-simplification path. Duplicate signature CI and the advisory auto-merge job were removed while the active ruleset retained `required_signatures` and `pr-policy`. Final-head review, complete threads, exclusive GO, required checks, and a SHA-conditional normal merge remained the authoritative sequence. |
+| ProjectHephaestus | Issue #2361 / PR #2612 | Verified-ci batched-remediation path. Each issue-comment handoff bound its reply set to the exact head and a thread-snapshot digest. A later same-head review safely reversed transient GO to NOGO. Final head `db9bd1ef8b80311564755e5b5fc5dbf5093603dc` reached zero unresolved threads before exclusive GO and conditional squash merge `d9d53fa0d522ee8799b67686830f81cf1f1ff17c`. |
