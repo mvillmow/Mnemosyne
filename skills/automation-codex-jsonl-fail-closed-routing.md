@@ -3,7 +3,7 @@ name: automation-codex-jsonl-fail-closed-routing
 description: "Fail closed when a headless Codex invocation reports fatal provider, sandbox, or tool events inside JSONL even if the CLI exits zero or writes a plausible final answer. Use when: (1) Codex reports `error`, `turn.failed`, or any failed/declined completed item but orchestration treats the run as successful, (2) nested macOS execution emits `sandbox_apply: Operation not permitted`, (3) a timeout-recovered final message could hide an earlier fatal event, (4) documented recoverable command or stream-lag events need narrow exceptions, or (5) provider failures must reach a provider-neutral worker/stage error path without broadening sandbox access."
 category: debugging
 date: 2026-08-04
-version: "2.0.0"
+version: "2.0.1"
 user-invocable: false
 verification: verified-ci
 history: automation-codex-jsonl-fail-closed-routing.history
@@ -138,14 +138,12 @@ Classification contract:
    state and does not set no-commit flags, mutate skip labels, call commit/push completion, or
    perform successful no-change cleanup.
 
-10. **Lock behavior at three layers.** Add:
-   - runtime tests for zero-exit fatal JSONL, terminal provider errors, failed and declined
-     unknown/web-search items, the recoverable stream-lag sequence, nonzero-process
-     nested-sandbox diagnostics, timeout-final-message recovery, and an ordinary failed-command
-     counterexample;
-   - a worker test proving the typed exception becomes a bounded failed agent result; and
-   - a stage test proving tool-error plus no-diff output remains on the retry/error path and
-     never reaches commit, skip, or successful cleanup.
+10. **Lock behavior at three layers.** Runtime tests cover zero-exit fatal JSONL, terminal
+    provider errors, failed and declined unknown/web-search items, the recoverable stream-lag
+    sequence, nonzero-process nested-sandbox diagnostics, timeout-final-message recovery, and
+    an ordinary failed-command counterexample. A worker test proves the typed exception becomes
+    a bounded failed agent result. A stage test proves tool-error plus no-diff output remains on
+    the retry/error path and never reaches commit, skip, or successful cleanup.
 
 11. **Require an executed host receipt before GO.** Registering a WorkerPool regression or
     proving that immutable host validation selects it does not prove the boundary executed.
