@@ -1,11 +1,11 @@
 ---
 name: automation-agent-tool-scopes-least-privilege
-description: "Enforce least-privilege tool availability for headless agent invocations, including Claude read-only runs where --allowedTools is permission pre-approval rather than a restrictive boundary. Use when: (1) an automation role must be non-mutating, (2) ambient CLI configuration can add tools, plugins, hooks, skills, or MCP servers, (3) caller-supplied grants must not broaden read-only execution, (4) older CLIs must fail closed instead of retrying under weaker defaults."
+description: "Enforce and test least-privilege tool policy at both host job construction and provider invocation boundaries. Use when: (1) an automation role must be non-mutating, (2) ambient CLI configuration can add tools, plugins, hooks, skills, or MCP servers, (3) caller grants must not broaden read-only execution, (4) a stage-produced AgentJob must carry an exact builder/parser/tool contract, or (5) older CLIs must fail closed instead of retrying under weaker defaults."
 category: architecture
 date: 2026-08-05
-version: "2.0.0"
+version: "2.1.0"
 user-invocable: false
-verification: verified-local
+verification: unverified
 history: automation-agent-tool-scopes-least-privilege.history
 tags:
   - automation
@@ -21,6 +21,8 @@ tags:
   - claude-cli
   - provider-adapter
   - policy-lock-tests
+  - agent-job
+  - host-owned-policy
 ---
 
 # Automation Agent Tool Scopes: Enforce Availability, Not Just Permission
@@ -32,9 +34,9 @@ tags:
 | Field | Value |
 | ------- | ------- |
 | **Date** | 2026-08-05 |
-| **Objective** | Make headless read-only agent runs expose a fixed non-mutating tool surface that ambient CLI configuration and caller grants cannot widen. |
-| **Outcome** | Success locally — a disposable Hephaestus worktree enforced Claude's `Read,Glob,Grep` built-in surface, disabled ambient discovery, supplied an empty strict MCP configuration, propagated incompatible-CLI failures, and preserved workspace-write behavior. |
-| **Verification** | `verified-local` — five focused behavior tests and Ruff checks passed; live Claude execution and CI validation remain pending. |
+| **Objective** | Make headless agent permissions host-owned, visible in stage-produced jobs, and enforced as provider tool availability rather than prompt prose. |
+| **Outcome** | V2.0 provider enforcement succeeded locally. V2.1 proposes an additional stage-boundary contract over the job's builder, parser, structured inputs, and exact tool scope. |
+| **Verification** | `unverified` for the v2.1 stage-job extension; the v2.0 provider-adapter behavior remains `verified-local`, with live Claude execution and CI still pending. |
 
 ### Core distinction
 
@@ -69,6 +71,8 @@ The authoritative behavior is documented in the
   the stage instead of silently retrying with weaker defaults.
 - Caller-supplied `allowed_tools` must remain configurable for workspace-write
   runs but must never broaden read-only runs.
+- A stage creates an `AgentJob` for remediation or review and tests currently infer
+  permissions or parser behavior from prompt wording instead of inspecting the job.
 
 ## Verified Workflow
 
@@ -144,6 +148,35 @@ can continue using the caller-supplied `allowed_tools`.
    boundary. A map that only feeds `--allowedTools` is permission policy, not
    read-only enforcement.
 
+## Proposed Stage-Job Contract Extension
+
+> **Warning:** This extension has not been validated end-to-end. Treat it as a hypothesis until the stage tests and CI pass.
+
+Provider-adapter tests prove the final CLI boundary, but they do not prove that a stage
+selected the intended prompt builder, result parser, structured input, or workspace-write
+scope. Assert those fields on the host-produced job before the agent runs:
+
+```python
+result = stage.handle(work_item)
+
+assert result.job.prompt_builder is expected_prompt_builder
+assert result.job.parse is expected_result_parser
+assert result.job.allowed_tools == EXPECTED_STAGE_TOOL_SCOPE
+assert json.loads(result.job.prompt_kwargs["threads_json"]) == expected_threads
+```
+
+Use the exact scope owned by the production stage. For example, an address-remediation job
+may intentionally include read/write/edit/shell/task/skill tools, while a reviewer job must
+remain read-only. The stable contract is the job field and provider-enforced availability,
+not a sentence inside the prompt claiming which tools are allowed.
+
+Keep both layers:
+
+1. **Stage boundary:** the correct route constructs a job with the intended builder, parser,
+   structured kwargs, and scope.
+2. **Provider boundary:** sandbox mode clamps or translates that scope into enforceable CLI
+   availability and fails closed on incompatibility.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -156,6 +189,8 @@ can continue using the caller-supplied `allowed_tools`.
 | Compatibility fallback | Retry an older CLI after removing unsupported policy flags | The retry succeeds under a weaker surface and turns a visible compatibility failure into a silent security downgrade | Preserve the nonzero result and do not retry |
 | Call it a sandbox | Describe Claude CLI tool/configuration flags as filesystem isolation | These controls operate inside Claude Code and do not provide seccomp, namespaces, chroot, or OS-level write prevention | Document this as model-tool restriction |
 | Run selected tests under the repository-wide coverage gate | Execute only five node IDs while `fail-under=83` remained enabled | All assertions passed, but pytest exited nonzero because selected tests cover only a small fraction of the package | Use `--no-cov` for focused behavior checks and run the full coverage suite separately |
+| Test permissions through prompt wording | Assert that the rendered prompt says which tools an agent may use | Prompt prose does not construct or enforce the host job; a differently scoped `AgentJob` can still run | Assert the stage-produced job's exact scope, then separately test provider enforcement |
+| Test only the provider adapter | Locked final CLI argv but did not prove the stage selected the intended builder, parser, or structured input | Correct adapter behavior cannot repair a wrongly constructed job or route | Add a stage-level job-construction assertion beside the adapter tests |
 
 ## Results & Parameters
 
@@ -234,6 +269,8 @@ def run_claude_text(
 - Return a fake incompatible-CLI result and assert the stage preserves its
   nonzero exit code.
 - Lock the existing workspace-write command as a regression test.
+- Assert stage-produced job builder/parser identity, decoded structured kwargs,
+  and the exact host-owned scope for each security-sensitive route.
 - Run focused tests independently from any repository-wide coverage threshold,
   then run the project's full coverage gate separately.
 
@@ -242,3 +279,4 @@ def run_claude_text(
 | Project | Context | Details |
 | --------- | --------- | --------- |
 | ProjectHephaestus | Issue #2369 plan applied in a disposable worktree | [Local verification evidence](./automation-agent-tool-scopes-least-privilege.notes.md) |
+| ProjectHephaestus | Issue #1950 behavior-first test refactor plan | Proposed remediation-job assertions for builder, parser, decoded thread JSON, and host-owned tool scope; implementation and CI pending. |
