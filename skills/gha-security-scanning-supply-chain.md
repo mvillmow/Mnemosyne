@@ -1,9 +1,9 @@
 ---
 name: gha-security-scanning-supply-chain
-description: "Use when: (1) adding CodeQL SAST to TypeScript/JavaScript workflows or Semgrep/Gitleaks to any PR pipeline, (2) CI security scans only trigger on push to main — not PRs — and need promotion to PR gates, (3) Gitleaks SARIF parsing uses grep instead of jq causing always-fail required checks, (4) enforcing pinned SHA-based action versions instead of mutable tags, (5) auditing or porting curl|bash installers with SHA-256 verification, (6) a GHA job fails at 'Set up job' due to unresolved transitive action dependency, (7) adding Bandit SAST as a required CI check for Python/pixi projects, (8) triaging and remediating CodeQL PR alerts when gh reports a check-run id instead of a workflow run id, (9) planning a SARIF -> GitHub Code Scanning (Security tab) upload via upload-sarif (gitleaks/trivy/codeql) and need a planning-stage verification checklist."
+description: "Use when: (1) adding CodeQL SAST to TypeScript/JavaScript workflows or Semgrep/Gitleaks to any PR pipeline, (2) CI security scans only trigger on push to main — not PRs — and need promotion to PR gates, (3) Gitleaks SARIF parsing uses grep instead of jq causing always-fail required checks, (4) enforcing pinned SHA-based action versions instead of mutable tags, (5) auditing or porting curl|bash installers with SHA-256 verification, (6) a GHA job fails at 'Set up job' due to unresolved transitive action dependency, (7) adding Bandit SAST as a required CI check for Python/pixi projects, (8) triaging and remediating CodeQL PR alerts when gh reports a check-run id instead of a workflow run id, (9) planning a SARIF -> GitHub Code Scanning (Security tab) upload via upload-sarif (gitleaks/trivy/codeql) and need a planning-stage verification checklist, (10) maintaining an allowlisted Bandit LOW-severity baseline that must fail closed on regressions, reductions, malformed JSON, or unreviewed updates."
 category: ci-cd
-date: 2026-06-19
-version: "1.4.0"
+date: 2026-08-06
+version: "1.5.0"
 user-invocable: false
 history: gha-security-scanning-supply-chain.history
 verification: verified-local
@@ -39,6 +39,12 @@ tags:
   - if-always
   - least-privilege
   - planning
+  - bandit-baseline
+  - baseline-drift
+  - fail-closed
+  - duplicate-json-keys
+  - atomic-write
+  - review-reference
 ---
 
 # GitHub Actions Security Scanning and Supply-Chain Hardening
@@ -47,10 +53,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| Date | 2026-06-19 |
+| Date | 2026-08-06 |
 | Objective | Set up security scanning (CodeQL/Semgrep/Gitleaks SAST + secrets + Bandit Python SAST), harden CI supply-chain (action SHA pinning, dependency scanning), and pin/verify curl\|bash installers with SHA-256 |
-| Outcome | Consolidated guidance for security gate setup, scan-trigger gaps, SARIF parsing fixes, action SHA pinning, transitive-pin diagnosis, installer trust-model hardening, Bandit SAST integration for Python/pixi projects, CodeQL PR alert remediation, and planning-stage verification for SARIF -> GitHub Code Scanning (Security tab) uploads via `upload-sarif` |
-| Verification | verified-local |
+| Outcome | Consolidated guidance for security gate setup, scan-trigger gaps, SARIF parsing fixes, action SHA pinning, transitive-pin diagnosis, installer trust-model hardening, Bandit SAST integration for Python/pixi projects, CodeQL PR alert remediation, planning-stage verification for SARIF uploads, and a proposed fail-closed Bandit LOW-baseline maintenance contract |
+| Verification | verified-local for established workflows; the Bandit LOW-baseline amendment is unverified and explicitly proposed |
 
 ## When to Use
 
@@ -74,6 +80,9 @@ tags:
 - Planning a change that uploads a scanner's SARIF output (gitleaks/trivy/codeql) to the GitHub
   Code Scanning (Security) tab via `github/codeql-action/upload-sarif`, especially when the scan
   step fails the build on findings (`--exit-code 1`)
+- Maintaining a reviewed Bandit LOW-severity count baseline where increases are regressions,
+  reductions are stale entries, malformed data must fail closed, and updates require an issue or
+  pull-request reference
 
 ## Verified Workflow
 
@@ -102,6 +111,12 @@ gh api "repos/<owner>/<repo>/check-runs/<check_run_id>" \
   --jq '{name,conclusion,details_url,html_url}'
 gh api "repos/<owner>/<repo>/check-runs/<check_run_id>/annotations" --paginate
 gh api "repos/<owner>/<repo>/code-scanning/alerts?pr=<pr>&tool_name=CodeQL" --paginate
+
+# Generate a LOW report without letting Bandit's finding status skip the custom policy checker
+uv run bandit -c pyproject.toml -r <targets> \
+  --severity-level low --exit-zero -f json -o build/bandit_low.json
+uv run python <baseline-checker>.py \
+  build/bandit_low.json <baseline>.json
 ```
 
 ### Detailed Steps
@@ -540,6 +555,134 @@ and excluding DoS/secrets-on-disk/rate-limiting/memory-safety/test-only/regex-in
 ≥8 AND TRUE POSITIVE; otherwise output `No security vulnerabilities identified above the confidence
 threshold.`
 
+## Proposed Workflow: Fail-Closed Bandit LOW Baselines
+
+> **Warning:** This workflow has not been validated end-to-end. Treat it as a hypothesis until
+> focused tests, workflow validation, and CI confirm the implementation.
+
+Use this pattern only when a project deliberately tracks LOW-severity Bandit findings instead of
+gating directly on Bandit's generic finding exit status. The baseline is reviewed policy data, not
+a cache: normal comparison is read-only, every count mismatch fails, and updates are explicit.
+
+### Quick Reference
+
+```bash
+# Generate a complete report; ordinary findings must not stop the policy checker.
+mkdir -p build
+uv run bandit -c pyproject.toml -r <targets> \
+  --severity-level low --exit-zero -f json -o build/bandit_low.json
+
+# Read-only comparison: 0 synchronized, 1 regression/stale drift, 2 invalid input.
+uv run python <baseline-checker>.py \
+  build/bandit_low.json <baseline>.json
+
+# Deliberate update after security review, followed by confirmation.
+uv run python <baseline-checker>.py \
+  build/bandit_low.json <baseline>.json \
+  --update-baseline --review-reference "issue #NNNN"
+uv run python <baseline-checker>.py \
+  build/bandit_low.json <baseline>.json
+```
+
+### Detailed Steps
+
+1. **Keep one baseline owner and compare the union of IDs.** Aggregate LOW findings by Bandit
+   `test_id`, then iterate `sorted(current.keys() | baseline.keys())`. Comparing only observed IDs
+   detects additions and increases but silently misses reductions and removals. Classify
+   `current > baseline` as `REGRESSION:` and `current < baseline` as `STALE BASELINE:`; both are
+   policy drift and must return exit 1.
+
+   ```python
+   def diff_against_baseline(
+       current: dict[str, int], baseline: dict[str, int]
+   ) -> list[str]:
+       problems: list[str] = []
+       for test_id in sorted(current.keys() | baseline.keys()):
+           current_count = current.get(test_id, 0)
+           baseline_count = baseline.get(test_id, 0)
+           if current_count > baseline_count:
+               reason = "is new" if baseline_count == 0 else "count increased"
+               problems.append(
+                   f"REGRESSION: {test_id} {reason} "
+                   f"({baseline_count} -> {current_count})"
+               )
+           elif current_count < baseline_count:
+               reason = (
+                   "is no longer observed"
+                   if current_count == 0
+                   else "count decreased"
+               )
+               problems.append(
+                   f"STALE BASELINE: {test_id} {reason} "
+                   f"({baseline_count} -> {current_count})"
+               )
+       return problems
+   ```
+
+2. **Reject ambiguous JSON before schema validation.** Load with `object_pairs_hook` so duplicate
+   names in any JSON object raise an error instead of silently taking the last value. Duplicate
+   report *findings* remain valid list entries and are accumulated with `Counter`; duplicate object
+   keys are malformed input.
+
+   ```python
+   def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+       result: dict[str, Any] = {}
+       for key, value in pairs:
+           if key in result:
+               raise ValueError(f"duplicate JSON key: {key}")
+           result[key] = value
+       return result
+
+   document = json.loads(text, object_pairs_hook=reject_duplicate_keys)
+   ```
+
+3. **Validate both documents strictly.** Require a top-level object. The Bandit report must have a
+   `results` list whose entries are objects with non-empty string `test_id` and
+   `issue_severity` fields. The baseline must retain its existing schema—a non-empty
+   `generated_by`, `severity: "LOW"`, and a `counts` object. Each baseline key must be a non-empty
+   string and each count a positive integer; explicitly reject `bool`, because Python treats it as
+   an `int` subclass.
+
+4. **Separate policy drift from untrustworthy input.** Use a stable CLI contract: exit 0 for a
+   synchronized comparison or successful deliberate update, exit 1 for any regression or stale
+   entry, and exit 2 for unreadable JSON, duplicate keys, or invalid report/baseline structure.
+   Keep the exported comparison function's `list[str]` return type if callers already depend on it;
+   classification prefixes add meaning without forcing a public API migration.
+
+5. **Make updates explicit, reviewed, canonical, and atomic.** Normal mode never writes. Require
+   `--update-baseline --review-reference "<issue-or-PR>"` as a pair; reject either flag alone.
+   Validate the report before touching the baseline, write the unchanged schema with sorted counts,
+   and use the project's atomic safe-write helper with backups disabled when version control is the
+   rollback mechanism. Never normalize a mismatch automatically in CI.
+
+   ```json
+   {
+     "generated_by": "issue #NNNN",
+     "severity": "LOW",
+     "counts": {
+       "B311": 1,
+       "B607": 2
+     }
+   }
+   ```
+
+6. **Let the custom checker own LOW-baseline policy.** Pass Bandit's supported `--exit-zero` flag
+   on this report-producing invocation so Bandit writes the JSON and the checker always runs. This
+   does not weaken the separate medium-or-higher scan. Give the LOW step an `id`, report both step
+   outcomes in the job summary, and add a workflow-structure test asserting `--exit-zero`, checker
+   invocation, and summary wiring remain together.
+
+7. **Test the state matrix, not only examples.** Cover equality; new, increased, decreased, and
+   missing IDs; duplicate LOW findings; duplicate JSON keys; missing and wrong-shaped report fields;
+   invalid baseline severity, provenance, keys, and counts; unreadable inputs; classified output;
+   all three exit-code classes; paired update flags; deterministic count order; and a successful
+   update followed by a clean comparison. Also assert normal comparison never rewrites the baseline.
+
+8. **Document review, update, confirmation, and rollback.** The runbook must tell maintainers to
+   generate the report, inspect every changed finding, record review in an issue or PR, run the
+   guarded update, and rerun comparison. Rollback is the reviewed JSON revert plus another
+   comparison; no workflow path owns an automatic update.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -578,6 +721,13 @@ threshold.`
 | Omitting `if: always()` on upload-sarif when scan uses `--exit-code 1` | Added an `upload-sarif` step after a gitleaks step that exits 1 on findings, with no `if:` guard | The scan step fails the job on findings, so the upload step is SKIPPED exactly when there ARE findings — the Security tab silently receives nothing | Always use `if: always() && hashFiles('<file>.sarif') != ''` on the upload-sarif step so findings reach the tab even when the scan fails the build |
 | Elevating `security-events: write` workflow-wide | Set `security-events: write` at the top-level workflow `permissions` instead of on the scan job | The scan job runs untrusted repo content, so workflow-wide elevation leaks the write scope to every other job | Scope `security-events: write` per-job on the scan job only; mirror an existing least-privilege job in the same repo as the pattern source |
 | Mutable `@v3` tag for codeql-action upload-sarif | Pinned `github/codeql-action/upload-sarif@v3` instead of reusing the repo's existing pinned SHA | Reintroduces a floating-version supply-chain risk and creates a second, divergent codeql-action reference in the same repo | Reuse the exact `codeql-action` SHA already pinned elsewhere in the repo (e.g. its `init`/`analyze` steps); verify with `gh api repos/github/codeql-action/git/refs/tags/<tag> -q '.object.sha'` |
+| Compared only observed Bandit IDs | Iterated `current.items()` and checked only new or increased counts | A removed finding disappears from `current`, so a stale baseline entry is invisible and can persist indefinitely | Compare the sorted union of current and baseline IDs; fail on both directions of drift |
+| Let Bandit's LOW finding exit status own the workflow step | Ran Bandit and the custom checker sequentially without `--exit-zero` | Bandit can stop the shell before the policy checker reads the completed report, so the generic scanner status bypasses the reviewed-baseline contract | Use Bandit's supported `--exit-zero` for this report-producing invocation and let the custom checker decide baseline acceptability |
+| Parsed baseline JSON with default duplicate-key behavior | Used plain `json.loads()` | Duplicate object keys silently overwrite earlier values, making malformed policy data appear valid | Use `object_pairs_hook` to reject duplicate keys before validating the schema |
+| Accepted any integer-like baseline count | Checked only `isinstance(count, int)` or allowed zero/negative counts | Booleans pass an ordinary integer check in Python, and non-positive entries encode findings that should instead be absent | Reject `bool` explicitly and require every stored count to be a positive integer |
+| Updated the baseline automatically on mismatch | Rewrote counts from the latest report during CI or ordinary comparison | A regression can normalize itself into future green runs without security review | Keep comparison read-only; require explicit update mode plus a non-empty issue/PR review reference |
+| Wrote the baseline directly | Truncated and rewrote the JSON file in place | An interrupted write can leave the security policy unreadable or partially updated | Validate first, serialize deterministically, then use an atomic safe-write helper |
+| Used one nonzero exit for drift and invalid input | Returned exit 1 for mismatches, missing files, and malformed JSON | CI and operators cannot distinguish a reviewed-policy mismatch from an untrustworthy scanner result | Reserve 1 for regression/stale drift and 2 for malformed or unreadable input |
 
 ## Results & Parameters
 
@@ -641,7 +791,7 @@ just   v1.36.0 linux-x86_64:   bc7c9f377944f8de9cd0418b11d2955adebfa25a488c0b5e3
 
 | Setting | Value | Reason |
 |---------|-------|--------|
-| Severity threshold | `-ll` (medium+) | Low-severity findings are noise in most projects |
+| Severity threshold | `-ll` (medium+) | Direct finding gate for actionable severity; use the reviewed-baseline pattern below if LOW findings are tracked |
 | Report format (CI) | `-f json -o bandit.json` | Machine-readable; upload as artifact; parseable on pass AND fail |
 | INI file | `--ini .bandit` | Centralizes config; scoped to project `targets` + `skips` |
 | Initial `skips` list | *(empty)* | YAGNI — only add when a real finding requires suppression |
@@ -650,6 +800,23 @@ just   v1.36.0 linux-x86_64:   bc7c9f377944f8de9cd0418b11d2955adebfa25a488c0b5e3
 | Pixi invocation (extra flags) | `pixi run python -m bandit -ll --ini .bandit -r src/<pkg>` | Use when adding `-f`, `-o`, or other flags beyond the task default |
 | Artifact upload condition | `if: always() && hashFiles('bandit.json') != ''` | Preserves triage data on both pass and fail |
 | Artifact retention | `retention-days: 90` | Sufficient for triage; keeps storage low |
+
+### Bandit LOW-baseline contract (proposed)
+
+| Concern | Contract |
+|---------|----------|
+| Comparison domain | Sorted union of observed and baseline `test_id` keys |
+| Regression | New ID or count increase; prefix `REGRESSION:`; exit 1 |
+| Stale baseline | Removed ID or count decrease; prefix `STALE BASELINE:`; exit 1 |
+| Clean comparison | Exact count equality; exit 0 |
+| Invalid input | Unreadable/malformed JSON, duplicate keys, or invalid schema; exit 2 |
+| Duplicate findings | Valid report list entries; accumulate with `Counter` |
+| Duplicate object keys | Invalid JSON policy input; reject via `object_pairs_hook` |
+| Baseline schema | Non-empty `generated_by`, `severity: "LOW"`, positive integer `counts` |
+| Update authorization | Explicit `--update-baseline` plus non-empty `--review-reference` |
+| Update write | Validate report first; sorted counts; atomic replacement; no CI auto-update |
+| Report generation | Bandit `--exit-zero` so the custom checker always decides baseline policy |
+| Rollback | Revert the reviewed baseline JSON change and rerun comparison |
 
 ### jq command reference (SARIF)
 
@@ -684,3 +851,4 @@ jq '[.runs[].results[].ruleId] | unique' results.sarif # rule IDs
 | ProjectTelemachy | Issue #157 — Bandit SAST as required CI check (pixi project, `_required.yml`) | verified-local (2026-06-19) |
 | Sanitized PR session | CodeQL weak hashing + command injection remediation after a rebase | verified-ci (2026-06-19): CodeQL and validate gates green |
 | ProjectAgamemnon | Issue #269 — plan to upload gitleaks SARIF to the Code Scanning tab in `_required.yml` | verified-local (2026-06-19): plan-only — workflow read directly, NOT run through actionlint/CI; planning-stage `upload-sarif` checklist captured |
+| ProjectHephaestus | Plan for strict Bandit LOW-baseline drift detection and review-referenced updates | unverified (2026-08-06): implementation and CI were not executed; proposed contract captured for future validation |
