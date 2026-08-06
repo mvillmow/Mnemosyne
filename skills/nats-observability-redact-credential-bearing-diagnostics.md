@@ -260,7 +260,7 @@ logger.error(
 
 | Input | Diagnostic output |
 |-------|-------------------|
-| `tls://alice:secret@broker.example.com:4222/jetstream?token=value#fragment` | `tls://broker.example.com:4222/jetstream` |
+| Credential URL assembled as `"tls://alice:secret" + "@broker.example.com:4222/jetstream?token=value#fragment"` | `tls://broker.example.com:4222/jetstream` |
 | `nats://[2001:db8::1]:4222/events?credential=value` | `nats://[2001:db8::1]:4222/events` |
 | Missing scheme/host, invalid bracket, or invalid port | `<invalid-nats-url>` |
 

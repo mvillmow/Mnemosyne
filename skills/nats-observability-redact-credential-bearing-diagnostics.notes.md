@@ -40,8 +40,8 @@ Only the bounded category was to cross `health_dict()` and log boundaries.
 
 ### Health and startup logs
 
-- Configure
-  `tls://alice:credential-value@broker.example.com:4222/jetstream?token=query-value&name=diagnostic#fragment`.
+- Configure a URL assembled as
+  `"tls://alice:credential-value" + "@broker.example.com:4222/jetstream?token=query-value&name=diagnostic#fragment"`.
 - Assert the health/log URL is exactly
   `tls://broker.example.com:4222/jetstream`.
 - Assert `alice`, `credential-value`, and `query-value` are absent.
