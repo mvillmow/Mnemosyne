@@ -2,8 +2,8 @@
 name: automation-review-authorization-ci-boundary
 description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, or (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization."
 category: architecture
-date: 2026-08-04
-version: "2.2.0"
+date: 2026-08-05
+version: "2.3.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -46,12 +46,13 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-04 |
+| **Date** | 2026-08-05 |
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce exact-head review/merge progression across repeated remediation rounds. |
 | **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. |
 | **Verification** | verified-ci — final review head `76ab9692`; three review threads resolved; required checks green; exclusive GO/NOGO transition completed; merge commit `b9a27e62` landed at `2026-08-04T22:15:59Z`. |
 | **Issue #2361 / PR #2612** | verified-ci — five remediation batches journaled 31 replies against exact heads and thread-snapshot digests. A later same-head review revoked an interim GO. The final review matched `db9bd1ef`; all 37 threads were resolved, GO replaced NOGO, required checks completed, and conditional merge `d9d53fa0` followed with native auto-merge null. |
 | **Issue #2633 / PR #2636** | verified-ci — reply delivery, PR-review reconciliation, and merge-wait admission moved behind closed typed worker jobs. Six replies used one head-and-snapshot-bound batch; final review matched `79974e42`, all threads resolved, GO replaced NOGO, required checks passed, and conditional merge `d993cc1b` followed. |
+| **Issue #2370 / PR #2651** | verified-ci — the first inline review bound to head `063c16ec` kept the PR at NOGO for three major behavior-contract gaps. Replies addressed prose-pinned follow-up assertions, restored plan/implementation-loop R0/R2 routing coverage, and fenced hostile TASK/TASK_REVIEW/DIFF/UNADDRESSED inputs. The final review bound to `cefd9d4f`; GO replaced NOGO, required checks passed independently, and conditional merge `3953a52` followed with native auto-merge null. |
 
 ## When to Use
 
@@ -244,6 +245,7 @@ CI/CD is outside the source-review decision:
 | Treat a no-commit reply as approval | The implementation reply removed unsupported PR claims without changing source. | It supplied remediation evidence but did not itself authorize the PR; only the subsequent final-head review could produce GO. | Keep no-commit replies reviewable evidence and leave disposition with the reviewer. |
 | Merge as soon as GO is labeled | PR #2602 received GO before the slow unit-test jobs and required-checks gate completed. | Merge eligibility was not ready until the final checks finished; merge-wait had to wait before the conditional merge. | Preserve the exact-head proof while waiting; CI readiness gates merging but does not grant review authority. |
 | Move GitHub I/O into a generic host callable | The first issue #2633 plan proposed `HostJob(Callable[..., Any], dict[str, Any])` and passing the shared coordinator GitHub accessor into worker threads. | The callable and mutable arguments could capture coordinator state, the shared client had no ownership contract, and structural checks could not prove isolation or receipt integrity. | Use a closed union of frozen request types, canonical immutable snapshots, fresh per-job clients, same-repository serialization, and receipts that embed the exact request. |
+| Treat the first inline review as final | PR #2651's first exact-head review found three major gaps: a prose-pinned follow-up test, missing implementation-loop routing coverage, and incomplete optional-input fence coverage. | The initial review correctly remained NOGO; a later head-bound response/review was required before merge. | Keep NOGO until every finding is answered on the current head, then require a fresh exact-head review before GO. |
 
 ## Results & Parameters
 
@@ -276,6 +278,7 @@ CI/CD is outside the source-review decision:
 | Worker boundary | Closed frozen GitHub request types; fresh job-scoped client; same-repository serialization; immutable request-bearing receipt applied before state advancement; no generic worker retry around mutation ambiguity. |
 | Merge-attempt boundary | Admission/readiness failure before the conditional request returns `attempted=False`; any result after request issuance returns `attempted=True` and must reconcile live state before retry. |
 | PR #2636 / issue #2633 audit | Initial review on `413110f8` produced six threads and NOGO. Batch `fc7b2b5b633c9080d859c835f0acfe5d` journaled six replies against final head `79974e42`; all threads resolved and a final review bound to that head. GO replaced NOGO at `03:55:07Z` / `03:55:09Z`, `required-checks-gate` passed at `04:02:17Z`, and conditional merge `d993cc1b` landed at `04:03:10Z`; native auto-merge was null. |
+| PR #2651 / issue #2370 audit | Review objects were empty-body `COMMENTED` records bound to `063c16ec` then `cefd9d4f`; the final inline findings/replies were audit evidence, not authorization. Durable sequence: NOGO at `01:08:20Z`, GO at `01:34:43Z`, NOGO removal at `01:34:44Z`, all required checks passed, and merge commit `3953a52` landed at `01:37:27Z`; post-merge `autoMergeRequest` was null. |
 
 ## Verified On
 
@@ -291,3 +294,4 @@ CI/CD is outside the source-review decision:
 | ProjectHephaestus | Issue #2330 / PR #2604 | Verified-ci policy-simplification path. Duplicate signature CI and the advisory auto-merge job were removed while the active ruleset retained `required_signatures` and `pr-policy`. Final-head review, complete threads, exclusive GO, required checks, and a SHA-conditional normal merge remained the authoritative sequence. |
 | ProjectHephaestus | Issue #2361 / PR #2612 | Verified-ci batched-remediation path. Each issue-comment handoff bound its reply set to the exact head and a thread-snapshot digest. A later same-head review safely reversed transient GO to NOGO. Final head `db9bd1ef8b80311564755e5b5fc5dbf5093603dc` reached zero unresolved threads before exclusive GO and conditional squash merge `d9d53fa0d522ee8799b67686830f81cf1f1ff17c`. |
 | ProjectHephaestus | Issue #2633 / PR #2636 | Verified-ci nonblocking review/merge path. Closed GitHub worker jobs preserved journal-before-delivery ordering, request/receipt identity, exact-head review, late-thread checks, and conditional-merge accounting. Final head `79974e422321f2ce0f840764f7a09bd6ca2f585b` reached zero unresolved threads, exclusive GO, all required checks, and squash merge `d993cc1bfc6334ba9ced45452c4f98f08303b453`. |
+| ProjectHephaestus | Issue #2370 / PR #2651 | Verified-ci behavior-contract review path. The initial exact-head review on `063c16ec` returned NOGO for three major findings; head-bound replies corrected them, the final exact-head review on `cefd9d4f` allowed exclusive GO, and merge-wait conditionally merged `3953a52` after required checks, with no native auto-merge. |
