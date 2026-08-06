@@ -2,9 +2,9 @@
 name: multi-repo-pr-automation-loop-orchestration
 description: "Use when: (1) running an automation loop (drive-prs-green, hephaestus-automation-loop, loop_runner.py, ci_driver.py) across multiple repos and it skips PRs, reports success incorrectly, silently no-ops, or never arms auto-merge, (2) a multi-repo swarm is orchestrating PRs across 3+ HomericIntelligence repos with sequential-within-repo merge ordering, (3) an ecosystem-wide sweep implements every planned issue across all repos in parallel waves, (4) the automation driver logs success but live GitHub state shows open failing PRs — always cross-check live state per repo before reporting done, (5) a hephaestus automation loop deadlocks because the drive-green phase skips iterations or the implementer returns early before labeling with state:implementation-go, (6) an org-wide issue backlog across 10+ repos needs parallel implementation with one signed auto-merge PR per issue, (7) automated review-plan files (claude-review-fix-*.md) need to be bulk-processed across stale PR branches, (8) _wait_for_pr_terminal polls the full timeout on a BLOCKED PR — add early-exit guarded by both _failing_required_check_names and _pending_required_check_names, (9) PLANNING (not driving) against a STALE completed-sweep / status-report issue (a myrmidon sweep report listing 'flagged for human' PRs, dated weeks ago) — re-verify the LIVE state of every flagged item before trusting ANY action item, because most have already changed state (merged, fixed, or re-gated) and the report's stated root causes are stale, (10) classifying an open PR's mergeStateStatus=BLOCKED at PLAN time: BLOCKED with ZERO failing AND zero pending required checks ⇒ branch-protection / review gate ⇒ the action is approve+merge, NOT a CI fix; BLOCKED with failing/pending checks ⇒ real CI work, (11) a stale status/sweep report names a ROOT CAUSE for a still-failing PR (a specific file/line, an empty-envvar, a missing config) and prescribes a fix — the report's CAUSAL diagnosis can be flat WRONG, not merely outdated; before writing any fix that targets a report-named file/line, READ that file at the PR's ref AND pull the latest failing CI log (gh run view --log-failed), because the prescribed fix may already be in place and the real cause something else entirely; also: NEVER assert a scope reduction (these N already merged) without a runnable per-PR gh pr view --json state loop, and NEVER infer a required-review gate from a commit title — query the repo's live required_pull_request_reviews; (12) direct PR seeds in the queue-based ProjectHephaestus pipeline fail after merge, try to adopt a deleted head branch, or keep final status red because stale failed attempts are counted after a later pass"
 category: ci-cd
-date: 2026-07-08
-version: "1.6.0"
-verification: verified-local
+date: 2026-08-05
+version: "1.7.0"
+verification: verified-ci
 user-invocable: false
 history: multi-repo-pr-automation-loop-orchestration.history
 tags:
@@ -51,6 +51,9 @@ tags:
   - latest-logical-items
   - preserved-worktree-filtering
   - terminal-pr-outcome
+  - loop-owned-review
+  - exact-head-merge
+  - zero-approval-review
 ---
 
 # Multi-Repo PR Automation Loop and Swarm Orchestration
@@ -63,7 +66,7 @@ tags:
 | **Objective** | One canonical for driving PRs to green across many HomericIntelligence repos via an automation loop or a myrmidon swarm: make the driver report honestly (no silent no-op, wait for the real terminal state, gate "repo done" on live open-PR count), cross-check every run summary against live GitHub state before reporting success, unblock the loop-runner / implementer deadlocks (drive-green discovery + the `state:implementation-go` labeling deadlock), orchestrate parallel waves across 3+ repos with sequential-within-repo merge ordering, run ecosystem-wide and org-wide planned-issue sweeps, and bulk-process automated review-plan files across stale PR branches. |
 | **Outcome** | Driver hardened across five ProjectHephaestus releases (PRs #833/#837/#839 → #876 → #879 → #1090) from "lies success" → "honest reporting" → "waits for the real outcome" → "re-arms, survives concurrency, resolves conflicts, never self-inflicts a lint failure" → "BLOCKED early-exit (PR #1090 closes #1088)". Existing-PR labeling deadlock shipped fixed (PRs #1073/#1075/#1077/#1079). Report-vs-live-state protocol surfaced honesty gaps merged as PR #849. Swarm pattern merged 87 PRs across 8 repos and ran ecosystem sweeps (51+ PRs / 78 issues retired, 0 broken-main events). Org-wide planned-issue swarm piloted ~51 signed squash-auto-merge PRs across 5 repos (430 plan-carrying issues detected). Batch review-plan processing cleared 14 OPEN PRs in ~20-30 min. v1.3.0 extends report-vs-live-state to PLAN time: re-planning a 20-day-stale completed-sweep report (Odysseus #299) found ~13 "flagged for human" PRs mostly already merged and every surviving root cause stale — adding the stale-report re-verify pattern, a plan-time BLOCKED-zero-failures-vs-with-failures classification, and four cheap live-state verification commands. v1.4.0 sharpens that pattern after a reviewer NOGO on the R1 re-plan: a stale report's ROOT-CAUSE diagnosis can be not just outdated but actively WRONG — the Keystone #568 report blamed an empty-envvar container name and a `_required.yml` env fix that reading the branch DISPROVED (static `container_name`, envvars already set), while the live failing log showed the real cause was an unavailable pinned podman apt version (`action.yml:97` / `podman-version.env:1`); plus two reviewer-forced verification rules (lock scope reductions with a per-PR state loop; confirm review gates against the live ruleset). v1.5.0 adds ProjectHephaestus PR #1854 / issue #1818: direct pipeline `--issues` / `--prs` scopes must seed and classify via per-target-repo GitHub accessors, regression tests should poison ambient helpers, and an interrupted post-merge `RESUMABLE at merge_wait` needs explicit GitHub merge proof plus dry-run reclassification to `finished PASS`. |
 | **Verification** | verified-ci (driver hardening and scoped direct pipeline behavior through ProjectHephaestus PR #1854); verified-local for v1.6.0 direct PR terminalization in ProjectHephaestus PR #2024 / issue #2023; v1.4.0 wrong-root-cause diagnosis techniques verified-local, while the specific Keystone #568 fix value remains unverified |
-| **Latest Update** | v1.6.0 adds ProjectHephaestus PR #2024 / issue #2023: direct PR seeds that are already MERGED or CLOSED must terminalize before branch adoption in coordinator seeding, CI, and implementation stages; final summaries and exit codes must use `latest_logical_items()` so superseded failed attempts do not poison a later pass. |
+| **Latest Update** | v1.7.0 adds ProjectHephaestus PR #2658 / issue #2378: the implementation review can authorize the loop-owned `state:implementation-go` transition without a GitHub approval review; `merge_wait` still requires fresh exact-head proof and live check evidence before merging. |
 
 ## When to Use
 
@@ -79,6 +82,7 @@ tags:
 - A direct pipeline run with explicit scopes (`--issues` or `--prs`) queues work for the wrong repository, seeds coordinator state from the ambient current repo, or reads PR implementation labels through ambient GitHub helpers instead of per-target-repo accessors.
 - A direct PR seed is already `MERGED` or `CLOSED`, but the queue-based pipeline continues into branch lookup, worktree adoption, or implementation-label routing and reports a failure after the PR is already terminal.
 - A direct `--prs` pipeline run exits red even though the latest attempt passed because an older failed attempt for the same logical PR is still counted in summaries, preserved-worktree guidance, or exit-code calculation.
+- A direct implementation PR reaches `state:implementation-go` and merge without a GitHub approval review or inline thread — verify the target repository's required-review count, the loop-owned label event, the exact reviewed head, and live checks instead of treating missing native review metadata as a failed loop review.
 - You are PLANNING (not driving) against a STALE completed-sweep / status-report issue — e.g. a myrmidon "open-PR health + auto-fix sweep" report, marked COMPLETED weeks ago, that lists ~13 "flagged for human" PRs. Do NOT trust the report's action items or root causes; re-verify the LIVE state of every flagged PR first.
 - The plan you are about to write classifies an open PR as `mergeStateStatus=BLOCKED` and you are tempted to prescribe a "CI fix" — first confirm whether BLOCKED is caused by failing/pending required checks (real CI work) or by a branch-protection / review gate with all required checks green (approve+merge, NOT a CI fix).
 - A report's stated root cause is a specific defect (a stale lockfile format version, a not-yet-removed file, a workflow `--tmpfs …:noexec` mount) — verify it still exists at the live HEAD/branch before planning a fix for it; the fix may have already landed.
@@ -112,6 +116,32 @@ for r in "${REPOS[@]}"; do
   echo "$r live-open=$open"   # cross-check against the run's _summary.json
 done
 ```
+
+### Direct implementation review to merge (PR #2658)
+
+For the queue pipeline, a successful implementation review does not have to create a
+native GitHub approval review or inline thread. The loop-owned `state:implementation-go`
+label is the durable authorization boundary; it is written only after the read-only
+review, fresh head checks, and structural review facts pass. `merge_wait` then validates
+the same reviewed head and the live repository merge requirements before conditionally
+merging it. Verify the distinction directly:
+
+```bash
+repo=HomericIntelligence/ProjectHephaestus
+pr=2658
+gh api "repos/$repo/branches/main/protection/required_pull_request_reviews" \
+  --jq '.required_approving_review_count'
+gh pr view "$pr" --repo "$repo" \
+  --json headRefOid,reviews,labels,statusCheckRollup,mergedAt,mergeCommit
+gh pr checks "$pr" --repo "$repo" --required
+gh api "repos/$repo/issues/$pr/timeline" --paginate \
+  --jq '.[] | {event,created_at,label:(.label.name // null),commit_id:(.commit_id // null)}'
+```
+
+The observed order for #2658 was: no native review/comments, `state:implementation-go`,
+passing check runs, merge commit, then PR close and head-branch deletion. A PR body note
+that the automation pipeline did not run tests is not a CI verdict; read the live check
+results and target-repository review rules before reporting the merge outcome.
 
 Direct pipeline explicit scopes must stay repo-scoped end-to-end:
 
@@ -622,6 +652,7 @@ Bulk-process automated `review-plan-*.md` + `review-*.json` (`phase=failed`) acr
 | Continue direct PR seeds after terminal GitHub state (v1.6.0) | Direct PR seeds that were already `MERGED` or `CLOSED` continued into `get_pr_head_branch`, worktree adoption, or implementation-label routing | GitHub may delete the head branch after merge, so branch-dependent recovery can fail after the PR already reached a terminal outcome | Query PR state first and centralize `_terminal_pr_outcome`: `MERGED` or truthy `mergedAt` => PASS, `CLOSED` => FAIL, `None`/open => continue |
 | Compute final status over every historical attempt (v1.6.0) | Final summary, preserved-worktree guidance, and exit-code calculation considered stale failed attempts from the same direct PR after a later pass | Superseded failures kept the run red even when the latest logical item had passed | Use `latest_logical_items()` for effective final summaries, cleanup guidance, and exit-code calculation |
 | Emit preserved-worktree cleanup advice from raw stale entries (v1.6.0) | Preserved-worktree guidance listed duplicate, stale, or nonexistent entries | Operators were told to inspect worktrees that no longer existed or no longer represented the latest logical outcome | Filter stale/nonexistent preserved-worktree entries before emitting cleanup guidance; track repo identity carefully when extending this filter |
+| Treat `Testing: Not run by the automation pipeline` in a PR body as a failed merge gate (v1.7.0) | Read the generated PR description instead of the target repository's live check and review state | PR #2658 had no automation-run test claim, but its live check set passed and the target branch required zero approving reviews | Treat PR prose as context; verify `state:implementation-go`, exact-head evidence, live checks, and the target repository's required-review rule |
 | `hephaestus-automation-loop --phases drive-green --loops N` | Increased loop budget / set `--loops 1` | Not-final-loop gate + zero-work early-exit make N>1 unreachable; `--loops 1` discovers `@me` issues not PRs | Bypass via `drive_prs_green.py --issues <N> --force-run`; fix is PR-based discovery (#818-#821) |
 | "Skip existing PRs to avoid clobbering" early-return | `_implement_issue` hard-returned before the review loop | Existing PRs never reviewed → never labeled `state:implementation-go` → never armed; 9 green PRs stuck | Replace the skip with `sync_worktree_to_remote_branch`; gate idempotency on the terminal label |
 | Run drive-green with `--issues` but leave bot-PR discovery + the open-PR done/arming gate repo-wide | Scoped `--issues 725,711` but `_discover_bot_prs()` stayed default-ON and `_list_open_prs_remaining()` returned the full paginated open-PR set | Scoped run pulled in unrelated Dependabot PRs (e.g. #1032) and armed/failed `rc=1` on all 59 open PRs the operator never selected | Gate bot-PR discovery on `not options.issues` (mirror the #819 failing-PR gate) and filter the done-gate/arming to `pr_map.values()` when scoped; the unscoped sweep stays repo-wide |
@@ -661,6 +692,15 @@ Bulk-process automated `review-plan-*.md` + `review-*.json` (`phase=failed`) acr
 
 A green PR with `--auto --squash` armed merges itself (CI required, 0 approvals).
 
+### Direct implementation review evidence (PR #2658 / issue #2378)
+
+The implementation review produced no native GitHub approval or inline thread. The
+loop-owned label was applied at `05:17:26Z`, the live required-check query returned 12
+passing entries, and the PR merged at `05:26:32Z` as
+`4ed77c1b42586a6b558ebcb2389295b5f314931b`; the head branch was deleted afterward.
+The target branch reported `required_approving_review_count=0`, so missing native review
+metadata was expected and not evidence that the loop skipped review.
+
 ### Agent tier + scale reference
 
 | Task | Tier | | Scale | Agents | Time |
@@ -695,6 +735,7 @@ merge-conflict ~1.
 
 | Project | Context | Details |
 | --------- | --------- | --------- |
+| ProjectHephaestus | Direct implementation review to merge | PR #2658 / issue #2378: read-only review, no native approval/comments, `state:implementation-go`, 12 passing live check entries, zero required approvals, merge commit `4ed77c1b42586a6b558ebcb2389295b5f314931b`, and post-merge head deletion. verified-ci from live GitHub evidence. |
 | ProjectHephaestus | Driver honest-success path | PRs #833/#837/#839 (guards) → #876 (wait-for-merge) → #879 (re-arm/concurrency/DIRTY/lint) → #1090 (BLOCKED early-exit closes #1088). Suite 3402 passed; verified-ci (mypy 320 files clean, ruff clean, all pre-commit hooks). |
 | ProjectHephaestus | Scoped drive-green honors `--issues` | PR #1110: bot-PR discovery gated on `not options.issues` (mirror #819); `open_prs_remaining` filtered to `pr_map.values()` when scoped so the done-gate + arming consider only scoped PRs. Repro: `--issues 725,711` pulled in Dependabot #1032 and failed `rc=1` on all 59 open PRs before the fix. Full `ci_driver` suite green in CI; verified-ci. |
 | ProjectHephaestus | Direct pipeline explicit scopes stay target-repo scoped | PR #1854 / issue #1818: coordinator seeding uses per-target-repo `StageGitHub` / `PipelineGitHub` accessors, tests poison ambient helpers, and interrupted post-merge `merge_wait` evidence is paired with GitHub merge proof plus dry-run `finished PASS`. Final head `30287af`; Required Checks `28771968071`, Test `28771968016`, and HOL Plugin Scanner `28771968083` succeeded; local full automation suite 3237 passed and affected slice 190 passed; verified-ci. |
