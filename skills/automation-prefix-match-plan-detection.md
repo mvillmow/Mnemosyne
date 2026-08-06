@@ -1,280 +1,336 @@
 ---
 name: automation-prefix-match-plan-detection
-description: "Fix substring-match anti-pattern in plan detection by delegating to canonical helpers or inlining proven prefix-match logic with shared constants. Use when: (1) fixing a substring-match bug in comment detection (like _has_plan), (2) after fixing a prefix-match bug in one automation module, grep sibling modules for the same anti-pattern, (3) implementing plan detection across multiple modules, (4) test regressions show Plan Review comments quoting the plan are miscounted as 'having a plan'."
-category: debugging
-date: 2026-06-05
-version: "1.0.0"
-verification: verified-ci
-tags: [automation, prefix-match, substring-match, anti-pattern, plan-detection, comment-parsing, comment-filters, canonical-helpers, sibling-modules, test-regression]
+description: "Centralize GitHub plan discovery behind a complete, ownership-verified, tri-state comment-journal contract. Use when: (1) boolean or None plan lookups can confuse API failure with absence, (2) bounded or best-effort comment caches gate publication or retries, (3) sibling paths disagree about plan markers or ownership, or (4) reconciliation and verification must retry without mutating state or consuming an absence budget."
+category: architecture
+date: 2026-08-06
+version: "2.0.0"
+user-invocable: false
+verification: unverified
+history: automation-prefix-match-plan-detection.history
+tags:
+  - automation
+  - plan-discovery
+  - github-comments
+  - complete-read
+  - ownership
+  - tri-state
+  - fail-closed
+  - retry-budget
+  - journal-reconciliation
+  - rest-pagination
+  - malformed-payload
+  - canonical-selector
 ---
 
-# Automation: Prefix-Match Plan Detection
+# Complete, Ownership-Aware Plan Discovery
 
 ## Overview
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-06-05 |
-| **Objective** | Fix substring-match anti-pattern in implementer_phase_runner._has_plan that was reintroducing bug class fixed in #455/#468/#484 |
-| **Outcome** | Success — _has_plan delegated to canonical helper; _fetch_plan_and_review uses inlined prefix-match logic; regression test added; 1085 tests pass (verified-ci) |
-| **Verification** | verified-ci |
-| **Context** | Issue #715 — ProjectHephaestus automation module |
+| **Date** | 2026-08-06 |
+| **Objective** | Ensure that only a complete, validated, actor-owned GitHub comment read can report that no canonical plan exists. |
+| **Outcome** | Proposed one shared `FOUND` / `ABSENT` / `READ_ERROR` contract for every plan-discovery path, including planning verification and durable-journal reconciliation. |
+| **Verification** | unverified — the architecture and acceptance matrix were reviewed, but the ProjectHephaestus implementation, focused tests, and CI were not run in this learning session. |
+| **History** | [changelog](./automation-prefix-match-plan-detection.history) |
+
+Prefix matching remains necessary, but it is only the final selector step. A
+trustworthy absence decision also requires a complete paginated read, strict raw
+payload validation, authenticated actor identity, consistent ownership derivation,
+and an explicit failure state. A boolean or `None` return cannot represent those
+conditions safely.
+
+The governing rule is:
+
+> `ABSENT` is evidence produced by a successful complete read. Transport,
+> rate-limit, reconciliation, identity, and malformed-payload failures are
+> `READ_ERROR`, never synthetic absence.
 
 ## When to Use
 
-**Trigger conditions:**
-
-- A bug fix in one automation module involves comment detection (prefix-match vs substring-match)
-- You've just fixed a substring-match bug in one module and need to audit sibling modules
-- Test regressions show Plan Review comments (which quote the plan) are miscounted as 'having a plan'
-- Comment-filtering logic is duplicated across _planner_state, _plan_reviewer, and _implementer modules
-- You're implementing a new plan-detection variant across multiple modules and need a proven pattern
+- A plan lookup returns `bool`, `str | None`, or an empty list after a GitHub API
+  failure.
+- A write, label transition, routing decision, or retry budget depends on whether
+  a plan comment exists.
+- Comment discovery uses GraphQL `last: 100`, `gh issue view --comments`, a capped
+  cache, or any other source that cannot prove complete enumeration.
+- Different consumers derive ownership from `viewerDidAuthor`, author association,
+  a path-specific default, or no ownership metadata at all.
+- Raw comment bodies are coerced with `str(...)`, allowing `None`, objects, or
+  arrays to masquerade as valid non-plan text.
+- A prefetched cache treats a missing key as a successful empty journal instead of
+  performing a real fallback read.
+- Durable journal reconciliation can fail before a stage normalizes labels or
+  routes from reconstructed state.
+- Verification performs multiple presence reads, publishes after an inconclusive
+  lookup, or increments an absence budget after a read error.
+- Prefix or substring marker logic is duplicated across planner, reviewer,
+  implementer, and queue-pipeline adapters.
 
 ## Verified Workflow
+
+> **Warning:** This workflow has not been validated end-to-end. Treat it as a
+> hypothesis until the focused implementation tests and CI confirm the contract.
 
 ### Quick Reference
 
 ```python
-# Pattern 1: Delegate to canonical helper (preferred when available)
-from hephaestus.automation.planner_state import _comments_contain_plan
+class CommentJournalReadError(RuntimeError):
+    """A complete, ownership-verifiable comment read was not obtained."""
 
-def _has_plan(comments: list[dict]) -> bool:
-    """Check if any comment contains a plan (POLA: single responsibility)."""
-    return _comments_contain_plan(comments)
 
-# Pattern 2: Inline prefix-match logic using shared constant (when return type differs)
-from hephaestus.automation.planner_state import PLAN_COMMENT_MARKER
+class PlanDiscoveryStatus(StrEnum):
+    FOUND = "found"
+    ABSENT = "absent"
+    READ_ERROR = "read_error"
 
-def _fetch_plan_and_review(comments: list[dict]) -> tuple[str | None, str | None]:
-    """Fetch plan and review comment from comments.
 
-    Return: (plan_text, review_comment) or (None, None) if no plan found.
-    """
-    for comment in comments:
-        body = comment.get("body", "")
-        # PREFIX-MATCH: only comments starting with marker count
-        if body.startswith(PLAN_COMMENT_MARKER):
-            return (body[len(PLAN_COMMENT_MARKER):].strip(), None)
-    return (None, None)
+@dataclass(frozen=True, slots=True)
+class PlanDiscoveryResult:
+    status: PlanDiscoveryStatus
+    plan_text: str | None = None
+    error: str | None = None
+
+
+def discover_plan(issue_number: int) -> PlanDiscoveryResult:
+    try:
+        raw = fetch_all_issue_comments_rest(issue_number)  # complete + paginated
+        comments = normalize_issue_comments(
+            raw,
+            viewer_login=require_authenticated_login(),
+        )
+        return discover_plan_from_comments(comments)
+    except CommentJournalReadError as exc:
+        return PlanDiscoveryResult(
+            PlanDiscoveryStatus.READ_ERROR,
+            error=str(exc),
+        )
+```
+
+```python
+lookup = github.discover_plan(issue_number)
+if lookup.status is PlanDiscoveryStatus.READ_ERROR:
+    return RETRY  # no comment write, label mutation, or absence-budget charge
+if lookup.status is PlanDiscoveryStatus.FOUND:
+    return ADVANCE
+
+# Only a confirmed ABSENT result may publish a candidate or spend the
+# plan-absence budget.
+assert lookup.status is PlanDiscoveryStatus.ABSENT
 ```
 
 ### Detailed Steps
 
-**Step 1: Identify the bug pattern**
+1. **Inventory every decision surface.** Search for boolean and optional plan
+   APIs, not just marker constants:
 
-Substring-match anti-pattern (BROKEN):
-```python
-def _has_plan(comments):
-    for comment in comments:
-        if "plan:" in comment.get("body", ""):  # BROKEN: matches "review: plan:" too
-            return True
-    return False
-```
+   ```bash
+   rg -n "has_existing_plan|_has_plan|_get_latest_plan|comments_contain_plan" \
+     hephaestus/automation
+   ```
 
-Why it's broken:
-- Plan Review comments have format: `## Review:\n\nThe plan:\n...` (the word "plan" appears after review text)
-- Substring match catches "The plan:" from review comments, not just actual plan comments
-- Original plan comments start with `## Plan\n` (the marker is at the start)
+   Include protocols, caches, direct CLI paths, worker results, pipeline
+   adapters, stage fakes, and tests. A shared helper is not authoritative while a
+   sibling path can still invent absence.
 
-Prefix-match fix (CORRECT):
-```python
-# Correct: check if comment STARTS with the marker
-if comment.get("body", "").startswith(PLAN_COMMENT_MARKER):
-    return True
-```
+2. **Place policy in the owning product layer.** Define the typed read exception,
+   tri-state result, strict normalizer, and canonical selector in the automation
+   journal-policy module. Keep the dependency direction one-way: product-layer
+   orchestration may use shared library helpers, but library packages must not
+   import product-layer policy.
 
-**Step 2: Search for canonical helper (delegation pattern)**
+3. **Use a complete authoritative reader.** For absence-sensitive decisions, use
+   the paginated REST issue-comments endpoint and continue until GitHub supplies no
+   next page. Preserve bounded-ingest protections, but reject every non-object page
+   element instead of silently dropping it. A cap or failure must produce an error,
+   not partial success.
 
-```bash
-# In the module with the bug:
-grep -rn "def _has_plan\|def _comments_contain_plan" hephaestus/automation/
+   Bounded GraphQL batches remain useful for non-authoritative review context.
+   They are not allowed to prove plan absence because `last: 100`, partial aliases,
+   and failure-to-empty fallbacks cannot establish completeness.
 
-# Check if planner_state has the proven implementation:
-grep -A 10 "_comments_contain_plan" hephaestus/automation/planner_state.py
-grep "PLAN_COMMENT_MARKER" hephaestus/automation/planner_state.py
-```
+4. **Normalize raw comments once and strictly.** Require a non-empty authenticated
+   viewer login. For every comment, require an object, a string body, and a
+   non-empty author login. Preserve timestamps, URLs, IDs, and author association
+   only after validating the ownership-critical fields. Do not coerce an invalid
+   body with `str()`.
 
-Expected output from planner_state:
-```python
-PLAN_COMMENT_MARKER = "## Plan\n"  # shared constant
+   ```python
+   viewer_did_author = author_login.casefold() == viewer_login.casefold()
+   ```
 
-def _comments_contain_plan(comments: list[dict]) -> bool:
-    """Canonical implementation: prefix-match only."""
-    for comment in comments:
-        if comment.get("body", "").startswith(PLAN_COMMENT_MARKER):
-            return True
-    return False
-```
+   Derive ownership identically in every REST path. Do not trust path-specific
+   defaults, synthetic ownership, or optional viewer metadata.
 
-**Step 3: Apply the fix**
+5. **Select the plan from normalized comments only.** Walk the complete journal
+   newest-first, ignore comments not authored by the authenticated actor, exclude
+   canonical plan-review comments, and accept only the canonical plan prefix. The
+   selector returns `FOUND` with the original body or `ABSENT`; it does not perform
+   I/O and cannot return `READ_ERROR` by itself.
 
-**If return type matches** (both return bool) → **delegate**:
+6. **Convert transport and shape failures at one boundary.** Wrap REST transport,
+   rate-limit, JSON, identity, and malformed-comment failures as
+   `CommentJournalReadError`. Consumer-facing discovery methods convert that typed
+   exception to `READ_ERROR`. Reconciliation surfaces may propagate it to an
+   explicit pipeline retry boundary.
 
-```python
-# Before (implementer_phase_runner.py, BROKEN)
-def _has_plan(comments: list[dict]) -> bool:
-    for comment in comments:
-        if "## Plan" in comment.get("body", ""):
-            return True
-    return False
+7. **Make caches preserve uncertainty.** Cache successful normalized journals
+   separately from per-issue read errors. A missing successful cache key means
+   "not read" and triggers a real fallback read; it does not mean "read and empty."
+   A cached read error stays `READ_ERROR` until a later prefetch or retry refreshes
+   it.
 
-# After (implementer_phase_runner.py, FIXED)
-from hephaestus.automation.planner_state import _comments_contain_plan
+8. **Reuse a reconciled snapshot at stage entry.** Wrap durable-journal loading
+   before any entry-label normalization or journal-derived routing. On
+   `CommentJournalReadError`, return `RETRY` with the work item, attempts, labels,
+   and mutation log unchanged. On success, use the same `JournalSnapshot` to
+   fast-forward a restart; do not perform a second plan-presence lookup.
 
-def _has_plan(comments: list[dict]) -> bool:
-    return _comments_contain_plan(comments)  # delegate to canonical
-```
+9. **Perform one lookup before publication in verification.** Branch on all three
+   statuses before reading or publishing a candidate:
 
-**If return type differs** (e.g., need to extract the plan text) → **inline prefix-match**:
+   | Status | Publication | Routing | Absence budget |
+   |--------|-------------|---------|----------------|
+   | `FOUND` | No duplicate write | Confirm labels, then advance | Unchanged |
+   | `ABSENT` | Candidate may be published | Existing publication path | May increment only if still absent |
+   | `READ_ERROR` | Forbidden | Stay in verification and retry | Unchanged |
 
-```python
-# Before (implementer_phase_runner.py, BROKEN)
-def _fetch_plan_and_review(comments: list[dict]) -> tuple[str | None, str | None]:
-    for comment in comments:
-        if "## Plan" in comment.get("body", ""):  # substring match — BROKEN
-            return (comment["body"], None)
-    return (None, None)
+   A required revision may still publish its candidate after a confirmed read,
+   even when an older canonical plan is `FOUND`; that is an explicit revision
+   rule, not an absence shortcut.
 
-# After (implementer_phase_runner.py, FIXED)
-from hephaestus.automation.planner_state import PLAN_COMMENT_MARKER
+10. **Preserve transaction recovery semantics.** If an idempotent recovery write
+    succeeded and its confirming read fails, return `RETRY` so the next pass can
+    reconcile durable GitHub state. Keep semantic journal conflicts fail-closed;
+    do not relabel them as transient read failures and retry forever.
 
-def _fetch_plan_and_review(comments: list[dict]) -> tuple[str | None, str | None]:
-    for comment in comments:
-        body = comment.get("body", "")
-        # Prefix-match: only comments STARTING with marker count as plans
-        if body.startswith(PLAN_COMMENT_MARKER):
-            return (body[len(PLAN_COMMENT_MARKER):].strip(), None)
-    return (None, None)
-```
+11. **Update interfaces and fakes, not only implementations.** Replace boolean
+    plan-presence methods in protocols with `PlanDiscoveryResult`. Stage fakes
+    should inject plan-read and journal-read failures independently. Keep concise
+    fixture inputs such as `has_plan=True` only as setup sugar; the callable
+    interface must be tri-state.
 
-**Step 4: Add regression test**
+12. **Test the contract as a matrix and through production adapters.** At minimum,
+    cover:
 
-```python
-# tests/unit/automation/test_implementer.py
-
-def test_has_plan_prefix_match():
-    """Regression: Plan Review comments quoting the plan should NOT count as having a plan.
-
-    Issue #715: substring-match was broken because Review comments contain 'The plan:' text.
-    """
-    # Plan comment (starts with marker)
-    plan_comment = {
-        "body": "## Plan\n\n1. Implement foo\n2. Test bar"
-    }
-    assert _has_plan([plan_comment]) is True
-
-    # Review comment (contains word 'plan' but doesn't start with marker) — MUST be False
-    review_comment = {
-        "body": "## Review:\n\nThe plan is good, implementation is correct."
-    }
-    assert _has_plan([review_comment]) is False
-
-    # Both comments: only plan comment counts
-    assert _has_plan([plan_comment, review_comment]) is True
-```
-
-**Step 5: Grep sibling modules for the same pattern**
-
-```bash
-# After landing the fix in implementer_phase_runner.py, check all sibling modules:
-cd hephaestus/automation
-
-# Search for the broken pattern in all files
-grep -rn "in .*\.get(\"body\"\|if \".*\" in.*body\|startswith.*Plan" *.py | grep -v planner_state | grep -v test
-
-# Expected: no matches (all modules either delegate or use prefix-match)
-```
+    - empty successful journal -> `ABSENT`;
+    - valid actor-owned plan -> `FOUND`;
+    - foreign-authored plan marker -> `ABSENT`;
+    - transport failure and rate limit -> `READ_ERROR`;
+    - missing viewer identity -> `READ_ERROR`;
+    - non-object comment, non-string body, or missing author login -> `READ_ERROR`;
+    - missing cache key -> fallback read, not absence;
+    - reconciliation read error at entry -> retry with no mutation;
+    - verification read error -> no publication and no absence-budget increment;
+    - raw malformed REST payload passed through the production adapter -> the same
+      stage-level no-mutation/no-budget outcome.
 
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
 |---------|----------------|---------------|----------------|
-| 1 | Patching `IssueImplementer._impl_module` in test to mock `_has_plan` behavior | `IssueImplementer` doesn't have `_impl_module`; the attribute is on `phase_runner` which is a different class | Always check class structure before patching; patch at the correct module level (`patch('implementer_phase_runner.run')` not `patch('IssueImplementer._impl_module')`) |
-| 2 | Using substring match ("## Plan" in body) for plan detection | Plan Review comments contain the string "The plan:" after review text, triggering false positives on substring match | Prefix-match is the only safe pattern for start-of-comment markers; use `startswith(PLAN_COMMENT_MARKER)` not `in` or `find()` |
-| 3 | Inline prefix-match in each module without a shared constant | Maintenance burden: if marker format changes, all inline locations must be updated; test fixtures may mask the invariant | Define the constant in the canonical module (planner_state.py) and import everywhere; prefer delegation when return types match |
+| Boolean or `None` discovery | `False` or `None` represented both a complete empty journal and any read/parse failure. | Callers published duplicate plans, exited successfully, or spent retry budget without evidence of absence. | Model `FOUND`, `ABSENT`, and `READ_ERROR` explicitly at every interface. |
+| Bounded GraphQL cache as absence authority | `last: 100` plus failure-to-empty behavior fed `has_existing_plan()`. | Older plans, capped journals, alias failures, and rate limits all looked empty. | Use complete paginated REST for absence; reserve bounded GraphQL for context optimization. |
+| Prefix matching without ownership | A canonical marker from any commenter counted as the automation actor's plan. | Foreign comments could suppress publication or drive restart routing. | Require authenticated viewer identity and compare validated author logins case-insensitively. |
+| Path-specific `viewer_did_author` defaults | Some adapters trusted GraphQL metadata while others synthesized ownership. | The same journal produced different results depending on the caller. | Normalize all authoritative REST paths through one ownership contract. |
+| Coercing malformed bodies with `str()` | `None`, objects, and arrays became ordinary text. | Invalid journals could still produce a confident `ABSENT`. | Reject non-string bodies before constructing normalized comments. |
+| Missing cache key returned `[]` | A prefetch map without an issue key was interpreted as a successful empty read. | Partial batch responses invented absence without a fallback request. | Distinguish missing, empty-success, and cached-error states. |
+| Re-reading after reconciliation | Entry reconciliation succeeded, then a separate presence lookup made routing depend on a different observation. | Added latency and a TOCTOU gap; the second read could fail after durable state was already known. | Reuse the reconciled snapshot for restart fast-forward. |
+| Catching journal read errors after label normalization | Entry labels were mutated before the stage learned that durable state could not be reconstructed. | Retry was no longer side-effect free. | Put the typed retry boundary before every entry mutation. |
+| Retrying semantic journal conflicts | All reconciliation failures were classified as transport errors. | Durable corruption could loop indefinitely instead of failing closed. | Retry typed read failures only; preserve semantic conflict outcomes. |
+| Fixing only marker substring logic | Shared prefix matching removed review-comment false positives but retained boolean, partial-read, and ownership ambiguity. | Correct parsing over incomplete or untrusted input still produced unsafe absence. | Treat marker selection as the final step of a complete discovery contract. |
 
 ## Results & Parameters
 
-### Code Locations
+### Result Invariants
 
-| File | Function | Change |
-|------|----------|--------|
-| `hephaestus/automation/implementer_phase_runner.py` | `_has_plan` | Delegated to `_comments_contain_plan` from planner_state |
-| `hephaestus/automation/implementer_phase_runner.py` | `_fetch_plan_and_review` | Inlined prefix-match using `PLAN_COMMENT_MARKER` constant |
-| `tests/unit/automation/test_implementer.py` | `TestHasPlanPrefixMatch` | Added regression test for Plan Review comment false positive |
-
-### Shared Constants
-
-```python
-# hephaestus/automation/planner_state.py
-PLAN_COMMENT_MARKER = "## Plan\n"  # Anchor for prefix-match
-
-# Usage:
-def _comments_contain_plan(comments: list[dict]) -> bool:
-    for comment in comments:
-        if comment.get("body", "").startswith(PLAN_COMMENT_MARKER):
-            return True
-    return False
+```text
+complete read + owned canonical plan     -> FOUND(plan_text)
+complete read + no owned canonical plan  -> ABSENT
+foreign canonical marker only            -> ABSENT
+transport/rate-limit failure              -> READ_ERROR
+missing authenticated login               -> READ_ERROR
+malformed page/comment/body/author         -> READ_ERROR
+bounded or partial read                    -> never authoritative ABSENT
+READ_ERROR in stage entry or VERIFY        -> RETRY, no mutation, no budget
+semantic journal conflict                  -> fail closed, not transient retry
 ```
 
-### Test Regression Pattern
+### ProjectHephaestus Example Ownership
 
-```python
-# Regression test: Review comments with quoted plan should NOT count as having plan
-review_with_quoted_plan = {
-    "body": "## Review:\n\nThe plan is well-designed. Implementation follows the design."
-}
-assert _has_plan([review_with_quoted_plan]) is False
+| Responsibility | Example location |
+|----------------|------------------|
+| Typed result, strict normalization, actor-owned selector | `hephaestus/automation/review_journal.py` |
+| Complete paginated REST ingestion | `hephaestus/automation/github_api/issues.py` |
+| Worker lookup and nonzero error result | `hephaestus/automation/plan_reviewer.py` |
+| Successful-journal/error caches and fallback read | `hephaestus/automation/state/planner.py` |
+| Legacy direct planning phase | `hephaestus/automation/_plan_phase.py` |
+| Production pipeline adapter | `hephaestus/automation/pipeline_github_queries.py` |
+| Protocol surface | `hephaestus/automation/_interfaces.py`, `pipeline/stages/base.py` |
+| Entry reconciliation and verification retry boundaries | `hephaestus/automation/pipeline/stages/planning.py` |
 
-# Only comments STARTING with marker count
-plan_comment = {"body": "## Plan\n\n1. Do X\n2. Do Y"}
-assert _has_plan([plan_comment]) is True
-```
-
-### Verification Commands
+### Proposed Validation Commands
 
 ```bash
-# Run affected tests
-pixi run pytest tests/unit/automation/test_implementer.py::TestHasPlanPrefixMatch -v
+uv run pytest \
+  tests/unit/automation/test_review_journal.py \
+  tests/unit/automation/test_interfaces.py -v
 
-# Run full automation test suite
-pixi run pytest tests/unit/automation/ -v
+uv run pytest \
+  tests/unit/automation/test_github_api.py \
+  tests/unit/automation/test_plan_reviewer.py \
+  tests/unit/automation/state/test_planner.py \
+  tests/unit/automation/test_stage_phases.py \
+  tests/unit/automation/test_pipeline_github.py \
+  tests/unit/automation/pipeline/stages/test_stage_planning.py -v
 
-# Grep for sibling-module anti-patterns (all should be negative)
-grep -rn "in .*body.*Plan\|if \"Plan\" in" hephaestus/automation/*.py | grep -v planner_state
+uv run ruff check \
+  hephaestus/automation/review_journal.py \
+  hephaestus/automation/github_api/issues.py \
+  hephaestus/automation/plan_reviewer.py \
+  hephaestus/automation/state/planner.py \
+  hephaestus/automation/state/review.py \
+  hephaestus/automation/_plan_phase.py \
+  hephaestus/automation/_interfaces.py \
+  hephaestus/automation/pipeline_github_queries.py \
+  hephaestus/automation/pipeline/stages/base.py \
+  hephaestus/automation/pipeline/stages/planning.py \
+  tests/unit/automation
+
+uv run mypy \
+  hephaestus/automation/review_journal.py \
+  hephaestus/automation/plan_reviewer.py \
+  hephaestus/automation/state/planner.py \
+  hephaestus/automation/_plan_phase.py \
+  hephaestus/automation/_interfaces.py \
+  hephaestus/automation/pipeline_github_queries.py \
+  hephaestus/automation/pipeline/stages/base.py \
+  hephaestus/automation/pipeline/stages/planning.py
 ```
+
+### Verification Promotion
+
+Promote this skill to `verified-local` only after the focused result-matrix,
+production-adapter, planning-stage, lint, and type commands pass against the
+implementation. Promote it to `verified-ci` only after the corresponding
+Hephaestus PR's required CI passes. Record exact test counts, the PR, and the
+commit SHA in the next history entry.
+
+Rollback requires no schema, label, configuration, dependency, or public comment
+format migration; revert the implementation normally while retaining the rule
+that partial reads must never be interpreted as absence.
 
 ## Verified On
 
 | Project | Context | Details |
 |---------|---------|---------|
-| ProjectHephaestus | Issue #715 — implementer_phase_runner prefix-match bug fix | [PR #1085](https://github.com/HomericIntelligence/ProjectHephaestus/pull/1085) — 1085 tests pass |
+| ProjectHephaestus | Reviewed ownership-aware `FOUND` / `ABSENT` / `READ_ERROR` plan-discovery design | Proposed only; implementation and CI validation pending. |
 
-## Key References
+## Related Skills
 
-- **Related Issues**: #455, #468, #484 (earlier substring-match bugs in other modules)
-- **Similar Pattern**: See `audit-driven-remediation-workflow` skill for post-fix grep workflow
-- **Canonical Helper Location**: `hephaestus/automation/planner_state.py:_comments_contain_plan`
-- **Shared Constant**: `PLAN_COMMENT_MARKER = "## Plan\n"`
-
-## Architecture Notes
-
-**Why delegation is preferred over duplication:**
-
-- `_comments_contain_plan` in planner_state is the authoritative implementation
-- Delegating ensures single source of truth for the prefix-match logic
-- If marker format changes (e.g., to `## Implementation Plan`), only one location needs update
-- Tests automatically pass the regression (Plan Review comment false positive)
-
-**Why inline prefix-match is acceptable for different return types:**
-
-- `_fetch_plan_and_review` returns `(plan_text, review_comment)` tuple, not bool
-- Can't delegate to `_comments_contain_plan` without wrapping
-- Inlining with shared `PLAN_COMMENT_MARKER` constant keeps the logic identical
-- Import the constant to maintain single source of truth
-
-**Anti-pattern to avoid (substring match):**
-
-- ❌ `if "## Plan" in body:` — catches partial matches
-- ❌ `if body.find("Plan") >= 0:` — catches word anywhere in comment
-- ✅ `if body.startswith(PLAN_COMMENT_MARKER):` — prefix-anchored, canonical format only
+- `automation-graphql-batch-comment-fetch` — bounded GraphQL comment context;
+  never use its partial/failure-to-empty result as authoritative plan absence.
+- `automation-forced-replanning-journal-recovery` — durable revision publication
+  and restart recovery once the comment journal has been read successfully.
+- `pipeline-routing-budget-terminal-vs-retry-paths` — budget attribution for
+  retry loops versus terminal outcomes.
