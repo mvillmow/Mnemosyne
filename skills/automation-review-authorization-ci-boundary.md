@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization, or (10) generated PR prose says tests were not run while live required checks must be audited separately."
+description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization, (10) generated PR prose says tests were not run while live required checks must be audited separately, or (11) Path.glob() can hide a discovery OSError and --allow-empty could turn an unreadable workflow inventory into a false success."
 category: architecture
 date: 2026-08-06
-version: "2.5.0"
+version: "2.6.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -39,6 +39,11 @@ tags:
   - github-worker-job
   - immutable-receipt
   - merge-attempt-accounting
+  - workflow-discovery
+  - path-iterdir
+  - glob-error-suppression
+  - empty-inventory
+  - issue-2382
 ---
 
 # Automation Review Authorization: CI Boundary
@@ -49,13 +54,14 @@ tags:
 |-------|-------|
 | **Date** | 2026-08-06 |
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce exact-head review/merge progression across repeated remediation rounds. |
-| **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. PR #2663 / issue #2381 confirmed the same boundary when generated PR prose said testing was not run: live required checks still independently established merge readiness, while the loop-owned GO label and exact-head merge remained authoritative. |
+| **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. PR #2663 / issue #2381 confirmed the same boundary when generated PR prose said testing was not run: live required checks still independently established merge readiness, while the loop-owned GO label and exact-head merge remained authoritative. PR #2664 / issue #2382 added the workflow-discovery fail-closed case: a review caught `Path.glob()` suppressing unreadable-directory errors, the implementation switched to `Path.iterdir()` with regression coverage, and the corrected exact head completed the normal GO-label, required-check, and conditional-merge path. |
 | **Verification** | verified-ci — final review head `76ab9692`; three review threads resolved; required checks green; exclusive GO/NOGO transition completed; merge commit `b9a27e62` landed at `2026-08-04T22:15:59Z`. |
 | **Issue #2361 / PR #2612** | verified-ci — five remediation batches journaled 31 replies against exact heads and thread-snapshot digests. A later same-head review revoked an interim GO. The final review matched `db9bd1ef`; all 37 threads were resolved, GO replaced NOGO, required checks completed, and conditional merge `d9d53fa0` followed with native auto-merge null. |
 | **Issue #2633 / PR #2636** | verified-ci — reply delivery, PR-review reconciliation, and merge-wait admission moved behind closed typed worker jobs. Six replies used one head-and-snapshot-bound batch; final review matched `79974e42`, all threads resolved, GO replaced NOGO, required checks passed, and conditional merge `d993cc1b` followed. |
 | **Issue #2370 / PR #2651** | verified-ci — the first inline review bound to head `063c16ec` kept the PR at NOGO for three major behavior-contract gaps. Replies addressed prose-pinned follow-up assertions, restored plan/implementation-loop R0/R2 routing coverage, and fenced hostile TASK/TASK_REVIEW/DIFF/UNADDRESSED inputs. The final review bound to `cefd9d4f`; GO replaced NOGO, required checks passed independently, and conditional merge `3953a52` followed with native auto-merge null. |
 | **Issue #2377 / PR #2657** | verified-ci — the first review kept the PR at NOGO after finding that Ruff `TimeoutExpired` and process-launch `OSError` could escape the validator's structured failure contract. Follow-up head `2f7e4763` handled both paths with CLI-mode regression coverage; the reply handoff recorded the exact head and `thread_snapshot_sha256`, GO replaced NOGO, required checks passed, and conditional merge `0ae28c86` completed with native auto-merge null. |
 | **Issue #2381 / PR #2663** | verified-ci — the generated PR body said testing was not run by the automation pipeline, but live `unit-tests` and `required-checks-gate` passed on final head `a1a3f26b`. No GitHub review or issue-comment object existed; the durable audit was GO at `07:29:56Z`, required checks at `07:33:48Z`, and conditional merge commit `e8a6f40f` at `07:34:52Z` with native auto-merge null. |
+| **Issue #2382 / PR #2664** | verified-ci — the first review found that `Path.glob()` suppressed directory `OSError`s, allowing `--allow-empty` to misclassify an unreadable inventory as clean. The implementation reply added `Path.iterdir()` discovery and a regression on the same head; the final review matched `0f0b74ee`, GO was labeled at `08:13:33Z`, NOGO was removed at `08:13:35Z`, the required-checks gate completed at `08:18:04Z`, and conditional merge commit `f5979f98` followed at `08:18:27Z`. |
 
 ## When to Use
 
@@ -83,6 +89,7 @@ tags:
 - A required or advisory CI job reports auto-merge state but does not own the loop's GO label or final merge mutation.
 - A remediation round replies to several review threads and its durable handoff must not replay against a changed head or changed thread set.
 - Review reconciliation or merge admission causes stage-step stalls, and moving the GitHub I/O to workers must preserve exact-head proof, receipt ordering, retry identity, and merge-attempt semantics.
+- Workflow validation uses `--allow-empty`, and a discovery API may suppress filesystem errors; verify that unreadable directories remain tool failures rather than becoming an allowed empty inventory.
 
 ## Verified Workflow
 
@@ -141,6 +148,11 @@ CI/CD is outside the source-review decision:
   - pr_review does not treat checks, runs, artifacts, or deployments as GO authority
   - merge_wait may observe repository readiness after GO, but readiness cannot create GO
   - do not create review-proof or advisory workflows and mistake their output for authorization
+
+workflow discovery must preserve tool-error evidence:
+  - do not use `Path.glob()` when unreadable directories must fail closed; Python 3.13 can suppress its `OSError`
+  - enumerate with `Path.iterdir()` and filter `.yml`/`.yaml` so directory failures remain observable
+  - `--allow-empty` may suppress only a confirmed empty inventory, never discovery, read, decode, size, or parse errors
 ```
 
 ### Detailed Steps
@@ -148,6 +160,13 @@ CI/CD is outside the source-review decision:
 1. Establish a single decision owner. Source-review authorization belongs to the automation loop when that loop is responsible for planning, implementation, review, and advancement. CI/CD may validate a repository independently, but it is not evidence the loop can depend on for this decision.
 
 2. Run the strict PR review as an in-loop, CI-free operation against the live PR diff. Require an explicit GO result before transition; a missing, ambiguous, or NO-GO result must not apply the approval label.
+
+   For workflow-discovery validation, distinguish a confirmed empty inventory from an incomplete
+   inventory. On Python 3.13, `Path.glob()` can suppress an `OSError` from an unreadable directory,
+   so use an error-propagating enumeration path such as `Path.iterdir()` and filter workflow suffixes.
+   `--allow-empty` may suppress only the policy violation for a successfully inspected empty inventory;
+   it must not hide discovery, read, decode, size, or parse tool errors. Test the real enumeration path,
+   not only a monkeypatch on an API that suppresses the error.
 
 3. Record the completed loop decision with one loop-owned state marker such as `state:implementation-go`. `merge_wait` should consume that marker and the live PR head when it restarts; it must not require a workflow artifact, lease, status context, or an external proof document.
 
@@ -258,6 +277,7 @@ CI/CD is outside the source-review decision:
 | Move GitHub I/O into a generic host callable | The first issue #2633 plan proposed `HostJob(Callable[..., Any], dict[str, Any])` and passing the shared coordinator GitHub accessor into worker threads. | The callable and mutable arguments could capture coordinator state, the shared client had no ownership contract, and structural checks could not prove isolation or receipt integrity. | Use a closed union of frozen request types, canonical immutable snapshots, fresh per-job clients, same-repository serialization, and receipts that embed the exact request. |
 | Treat the first inline review as final | PR #2651's first exact-head review found three major gaps: a prose-pinned follow-up test, missing implementation-loop routing coverage, and incomplete optional-input fence coverage. | The initial review correctly remained NOGO; a later head-bound response/review was required before merge. | Keep NOGO until every finding is answered on the current head, then require a fresh exact-head review before GO. |
 | Treat returned subprocess failures as the whole tool-failure surface | PR #2657 initially converted Ruff's returned nonzero/invalid-output cases but left `TimeoutExpired` and process-launch `OSError` outside `RuffComplexityError`. | Those failures could bypass both the human false-return contract and the JSON error envelope with a traceback. | Normalize subprocess exceptions at the runner boundary, add regression coverage for both CLI modes, and require a fresh exact-head review before GO. |
+| Treat `Path.glob()` as an error-propagating workflow discovery API | PR #2664 / issue #2382 used `Path.glob()` to enumerate workflow files and tested `--allow-empty` around a monkeypatched `glob()` failure. | Python 3.13 suppresses the directory `OSError`, so an unreadable directory became an empty inventory and `--allow-empty` could return success. | Use `Path.iterdir()` (or another error-propagating API), classify unreadable discovery as a tool error, and regression-test the real directory failure path. |
 
 ## Results & Parameters
 
@@ -293,6 +313,7 @@ CI/CD is outside the source-review decision:
 | PR #2651 / issue #2370 audit | Review objects were empty-body `COMMENTED` records bound to `063c16ec` then `cefd9d4f`; the final inline findings/replies were audit evidence, not authorization. Durable sequence: NOGO at `01:08:20Z`, GO at `01:34:43Z`, NOGO removal at `01:34:44Z`, all required checks passed, and merge commit `3953a52` landed at `01:37:27Z`; post-merge `autoMergeRequest` was null. |
 | PR #2657 / issue #2377 audit | The initial review found an incomplete subprocess exception boundary and left the PR at NOGO. The remediation reply was journaled against head `2f7e4763` with batch nonce `f35cdfcb` and thread snapshot `490835fc`; `state:implementation-go` replaced NOGO, `pr-policy`, unit tests, and `required-checks-gate` passed, and merge-wait conditionally squash-merged the reviewed path as `0ae28c86` with native auto-merge null. |
 | PR #2663 / issue #2381 audit | Generated PR prose reported no automation-pipeline testing, but live `unit-tests` and `required-checks-gate` passed on final head `a1a3f26b`. GitHub exposed no review or issue-comment object; GO was labeled at `07:29:56Z`, checks completed at `07:33:48Z`, and merge commit `e8a6f40f` followed at `07:34:52Z` with native auto-merge null. |
+| PR #2664 / issue #2382 audit | The first exact-head review identified the suppressed-directory-error gap in `Path.glob()`; the implementation reply stayed tied to the PR head and added `Path.iterdir()` plus regression coverage. The final review matched `0f0b74eecd94339b269d0e5e95b7b83921d2d3f6`; GO replaced NOGO, `required-checks-gate` completed at `08:18:04Z`, and `merge_wait` conditionally merged `f5979f98eddb3ec311b5d7f5a7c3acb9f791a845` at `08:18:27Z`. |
 
 ## Verified On
 
@@ -311,3 +332,4 @@ CI/CD is outside the source-review decision:
 | ProjectHephaestus | Issue #2370 / PR #2651 | Verified-ci behavior-contract review path. The initial exact-head review on `063c16ec` returned NOGO for three major findings; head-bound replies corrected them, the final exact-head review on `cefd9d4f` allowed exclusive GO, and merge-wait conditionally merged `3953a52` after required checks, with no native auto-merge. |
 | ProjectHephaestus | Issue #2377 / PR #2657 | Verified-ci subprocess-failure review path. The initial review exposed timeout/process-launch exceptions outside the structured Ruff failure contract; the pushed remediation head added normal and JSON CLI coverage, the exact-head/thread-snapshot handoff preceded GO, required checks completed, and merge-wait produced `0ae28c860633d9f77d80ac12508ccf86b0a335fb`. |
 | ProjectHephaestus | Issue #2381 / PR #2663 | Verified-ci compact inline-review path. The generated PR body said testing was not run, but live required checks passed independently. No GitHub review/comment object existed; final head `a1a3f26b0de9343a187fe5c336af16d0883bc3fa` reached durable GO, required-check completion, and conditional merge `e8a6f40f72713c45a33a30098bc97d31708fc33d` with native auto-merge null. |
+| ProjectHephaestus | Issue #2382 / PR #2664 | Verified-ci workflow-discovery review path. The initial review found that `Path.glob()` hid unreadable-directory failures, so `--allow-empty` could incorrectly pass. A same-head implementation reply documented the `Path.iterdir()` fix and regression; the loop then applied `state:implementation-go`, removed `state:implementation-no-go`, waited for required checks, and conditionally merged the exact reviewed head. |
