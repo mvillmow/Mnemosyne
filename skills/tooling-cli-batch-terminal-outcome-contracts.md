@@ -1,9 +1,9 @@
 ---
 name: tooling-cli-batch-terminal-outcome-contracts
-description: "Design honest batch CLI outcomes. Use when: (1) a command returns success after blocked, failed, unmapped, or unprocessed work, (2) requested, processed, validated, skipped, passed, failed, and diagnostic counts are conflated, (3) JSON output changes shape on setup errors or interruption, (4) dry-run or KeyboardInterrupt needs explicit status semantics."
+description: "Design honest batch CLI outcomes. Use when: (1) a command returns success after blocked, failed, unmapped, or unprocessed work, (2) malformed mapping/config inputs or invalid JSON Schema definitions escape as exceptions, (3) human and JSON diagnostics diverge, (4) requested, validated, failed, and diagnostic counts are conflated, or (5) dry-run and interruption need explicit semantics."
 category: tooling
 date: 2026-08-06
-version: "1.1.0"
+version: "1.2.0"
 user-invocable: false
 verification: unverified
 history: tooling-cli-batch-terminal-outcome-contracts.history
@@ -21,6 +21,9 @@ tags:
   - unmapped-inputs
   - outcome-accounting
   - diagnostics
+  - draft7
+  - schema-map
+  - structured-diagnostics
 ---
 
 # Batch CLI Terminal Outcome Contracts
@@ -29,10 +32,10 @@ tags:
 
 | Field | Value |
 | ------- | ------- |
-| **Date** | 2026-08-06 (v1.1.0; originally 2026-08-01) |
+| **Date** | 2026-08-06 (v1.2.0; originally 2026-08-01) |
 | **Objective** | Give every requested or discovered batch item an explicit terminal outcome, distinguish work counters from diagnostic counts, derive the command exit code from those outcomes, and emit one stable structured summary on every path |
-| **Outcome** | Proposed design for manual batch drivers and file validators, including per-item failure isolation, unmapped-input policy, interruption handling, domain-specific dry-run semantics, complete aggregation, compatibility aliases, and single-line untrusted details |
-| **Verification** | unverified — derived from reviewed ProjectHephaestus implementation plans for `hephaestus-merge-prs` and schema validation; both implementations and CI validation are pending |
+| **Outcome** | Proposed design for manual batch drivers and file validators, including per-item failure isolation, atomic map validation, invalid Draft 7 definition diagnostics, human/JSON error parity, unmapped-input policy, interruption handling, domain-specific dry-run semantics, complete aggregation, compatibility aliases, and single-line untrusted details |
+| **Verification** | unverified — derived from reviewed ProjectHephaestus implementation plans for `hephaestus-merge-prs` and schema validation; the implementations, focused tests, and CI validation are pending |
 | **History** | [changelog](./tooling-cli-batch-terminal-outcome-contracts.history) |
 
 ## When to Use
@@ -40,6 +43,9 @@ tags:
 - A CLI discovers multiple pull requests, jobs, files, or other items and currently processes them with fire-and-forget returns.
 - A file validator warns and skips an explicitly requested file when no schema or policy mapping matches it.
 - A summary reports requested files as checked files, or treats multiple diagnostics from one file as multiple failed files.
+- A decoded schema or policy map is destructured before its root, entry arity, field types, regexes, or paths are validated.
+- A JSON Schema validator accepts an invalid schema definition and later leaks `SchemaError`, `UnknownType`, or another raw exception.
+- Human mode prints useful failures but JSON mode emits only a generic status, or JSON stdout is contaminated by verbose/pass output.
 - A per-item exception aborts the whole batch, or an exception is logged but the command still exits `0`.
 - Some discovered items can be blocked or accidentally left unprocessed, and those conditions must make the command fail.
 - A dry-run must distinguish operation suppression (an intentional skip) from validation preview (preserve observed failures but suppress the process failure code).
@@ -90,6 +96,50 @@ def _exit_code(outcomes: list[_ItemOutcome], requested: int) -> int:
     if statuses & {_ItemStatus.BLOCKED, _ItemStatus.FAILED}:
         return 1
     return 0
+```
+
+For a schema-driven validator, validate the control inputs before validating instances and
+return diagnostics to the renderer:
+
+```python
+def load_mapping(path: Path) -> list[tuple[re.Pattern[str], Path]]:
+    data: object = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("schema map root must be a list")
+
+    mapping: list[tuple[re.Pattern[str], Path]] = []
+    errors: list[str] = []
+    for index, entry in enumerate(data):
+        if not isinstance(entry, list) or len(entry) != 2:
+            errors.append(f"entry {index}: expected a two-item list")
+            continue
+        # Validate both fields independently; append only fully valid entries.
+        # Compile regexes here and reject empty or NUL-containing paths.
+
+    if errors:
+        raise ValueError("invalid schema map:\n" + "\n".join(f"- {e}" for e in errors))
+    return mapping
+
+
+def validate_instance(path: Path, schema: object) -> list[str]:
+    validator_type = jsonschema.Draft7Validator
+    try:
+        validator_type.check_schema(schema)
+    except jsonschema.exceptions.SchemaError as exc:
+        location = ".".join(str(part) for part in exc.absolute_path) or "<root>"
+        return [f"Invalid JSON Schema at [{location}]: {exc.message}"]
+    return [
+        f"[{'.'.join(map(str, error.absolute_path)) or '<root>'}] {error.message}"
+        for error in sorted(
+            validator_type(schema).iter_errors(load_yaml(path)),
+            key=lambda item: list(item.path),
+        )
+    ]
+
+
+def check_files(...) -> tuple[int, list[str]]:
+    """Return one diagnostic list; do not print failures here."""
+    ...
 ```
 
 For a file validator that aggregates counts instead of retaining item records:
@@ -164,6 +214,16 @@ Stable JSON envelope on every path:
 
 14. **Assert accounting invariants directly.** Every requested occurrence must reach exactly one terminal outcome, so assert `requested == passed + failed + skipped`. Do not assert `validated == passed + failed`: failures that occur before validation, such as an unmapped input or unreadable schema, are failed but not validated.
 
+15. **Validate decoded maps before destructuring.** Treat JSON decoding as only the first input boundary. Require the expected root container, entry container and arity, string field types, compilable regexes, and non-empty/NUL-free paths. Accumulate index-qualified entry errors and reject the entire map atomically; never return a partially usable mapping.
+
+16. **Validate schema definitions before instances.** Keep optional validator imports lazy, then call the selected validator class's `check_schema()` before loading or validating an instance. Translate `SchemaError` at that boundary into the same diagnostic-list contract as instance errors, including a stable absolute path such as `<root>`.
+
+17. **Collect once and render twice.** A checker should return diagnostics instead of printing failures. Human mode prefixes and writes the returned strings to stderr. JSON mode passes the same strings to the structured emitter, suppresses verbose success output, and writes exactly one parseable document to stdout with an empty stderr.
+
+18. **Catch expected text-input failures completely.** Schema and map reads should translate `OSError`, `UnicodeDecodeError`, and `JSONDecodeError`. A UTF-8 decoding failure is an input diagnostic, not an internal traceback.
+
+19. **Test the control plane as thoroughly as instances.** Parameterize wrong roots, entry shapes, field types, invalid regexes, empty/NUL paths, and invalid schema definitions. Assert aggregated entry indexes, multiple independent instance errors, nonzero human and JSON exits, parsed JSON diagnostic content, channel isolation, and absence of `Traceback`.
+
 ## Verified Workflow
 
 _Not applicable._ This skill was captured from a planning session and is
@@ -188,6 +248,10 @@ exists because `scripts/validate_plugins.py` requires the literal
 | Report requested files as `files_checked` | JSON populated the compatibility field from the input-list length | Unmapped inputs and schema-load failures never reached validation, so the field overstated actual checks | Define `files_checked` as an alias for `validated` |
 | Use diagnostic count as failed-file count | Every validation diagnostic was counted like a separate failed file | One invalid file can emit multiple diagnostics, so failure cardinality was inflated | Keep diagnostic volume and terminal file outcomes in separate fields |
 | Rewrite failures during validation dry-run | Dry-run converted observed failures into passes or skips | The preview no longer described what enforcement would find | Preserve classifications and suppress only the final process failure code |
+| Destructure decoded map entries immediately | A non-list root, wrong-length entry, non-string field, bad regex, or NUL path raised `TypeError`, `ValueError`, or `re.error` outside the CLI contract | JSON syntax validity does not imply application-level structure validity | Validate every structural layer, aggregate index-qualified errors, and reject the map atomically |
+| Instantiate a Draft 7 validator without checking its schema | An invalid schema definition survived loading and later raised a raw validator exception | Instance validation assumes a valid control schema | Call `Draft7Validator.check_schema()` first and translate `SchemaError` into a normal diagnostic |
+| Print failures inside the batch checker | Human mode had details, while JSON mode either lost them or mixed prose with the JSON document | Two rendering paths did not share one source of truth | Return diagnostic strings and let `main()` choose stderr or the JSON envelope |
+| Catch file and JSON errors but omit text decoding | Invalid UTF-8 escaped the expected input-error boundary | `Path.read_text(encoding="utf-8")` can fail before JSON decoding begins | Include `UnicodeDecodeError` with other expected schema-file input failures |
 
 ## Results & Parameters
 
@@ -236,6 +300,39 @@ Schema-validation specialization:
 | No mapping, `--allow-unmapped` | Unchanged | `skipped` +1 | Unchanged |
 | Matching schema cannot be loaded | Unchanged | `failed` +1 | +1 |
 
+Schema control-input contract:
+
+| Input failure | Diagnostic behavior | Partial work allowed? |
+| ------- | ------------------- | --------------------- |
+| Map root is not a list | `schema map root must be a list` | No |
+| Map entry has wrong shape or field types | Aggregate every `entry N` explanation | No |
+| Regex cannot compile | Include index, pattern representation, and `re.error` text | No |
+| Schema path is empty or contains NUL | Include an index-qualified stable explanation | No |
+| Schema file is unreadable, invalid UTF-8, or invalid JSON | Return `Could not load schema ...` | Other files may continue if the command's batch contract permits it |
+| Draft 7 schema definition is invalid | Return `Invalid JSON Schema at [path]: ...` | The affected instance is not validated |
+
+Human/JSON rendering parity for a validation failure:
+
+```python
+exit_code, errors = check_files(..., dry_run=args.dry_run)
+if args.json:
+    emit_json_status(
+        exit_code,
+        message="schema validation failed" if exit_code else None,
+        errors=errors,
+        error_count=len(errors),
+        files_checked=<preserved public meaning>,
+        dry_run=args.dry_run,
+    )
+else:
+    for error in errors:
+        print(f"ERROR: {error}", file=sys.stderr)
+```
+
+Preserve the command's established `files_checked` meaning during a diagnostic-hardening
+change. For a new contract, prefer `files_checked == validated`; migrate an existing public
+counter only as a deliberate, separately tested compatibility change.
+
 Required invariants:
 
 ```python
@@ -267,12 +364,20 @@ ruff format --check path/to/batch_cli.py tests/unit/path/to/test_batch_cli.py
 mypy path/to/batch_cli.py tests/unit/path/to/test_batch_cli.py
 ```
 
+For schema-boundary hardening, the focused matrix should also include:
+
+```bash
+pytest tests/unit/path/to/test_schema.py \
+  -k "schema_map or invalid_schema or multiple_validation_errors" -v
+```
+
 ## Verified On
 
 | Project | Context | Details |
 | ------- | ------- | ------- |
 | ProjectHephaestus | Reviewed implementation plan for hardening `hephaestus-merge-prs` | Unverified until implementation tests and CI pass |
 | ProjectHephaestus | Reviewed schema-validation plan for failing unmapped explicit files and separating five file counters | Unverified until implementation tests, lint, type checking, and CI pass |
+| ProjectHephaestus | Reviewed plan for malformed schema-map inputs, invalid Draft 7 definitions, and equivalent human/JSON diagnostics | Unverified until focused tests, Ruff, mypy, and CI pass |
 
 ## References
 
