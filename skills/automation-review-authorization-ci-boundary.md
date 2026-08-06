@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, or (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization."
+description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization, or (10) generated PR prose says tests were not run while live required checks must be audited separately."
 category: architecture
-date: 2026-08-05
-version: "2.4.0"
+date: 2026-08-06
+version: "2.5.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -25,6 +25,7 @@ tags:
   - review-batch
   - pr-handoff
   - test-receipt
+  - generated-test-receipt
   - validation-classification
   - ruff-format
   - skip-revival
@@ -46,14 +47,15 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-05 |
+| **Date** | 2026-08-06 |
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce exact-head review/merge progression across repeated remediation rounds. |
-| **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. |
+| **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. PR #2663 / issue #2381 confirmed the same boundary when generated PR prose said testing was not run: live required checks still independently established merge readiness, while the loop-owned GO label and exact-head merge remained authoritative. |
 | **Verification** | verified-ci — final review head `76ab9692`; three review threads resolved; required checks green; exclusive GO/NOGO transition completed; merge commit `b9a27e62` landed at `2026-08-04T22:15:59Z`. |
 | **Issue #2361 / PR #2612** | verified-ci — five remediation batches journaled 31 replies against exact heads and thread-snapshot digests. A later same-head review revoked an interim GO. The final review matched `db9bd1ef`; all 37 threads were resolved, GO replaced NOGO, required checks completed, and conditional merge `d9d53fa0` followed with native auto-merge null. |
 | **Issue #2633 / PR #2636** | verified-ci — reply delivery, PR-review reconciliation, and merge-wait admission moved behind closed typed worker jobs. Six replies used one head-and-snapshot-bound batch; final review matched `79974e42`, all threads resolved, GO replaced NOGO, required checks passed, and conditional merge `d993cc1b` followed. |
 | **Issue #2370 / PR #2651** | verified-ci — the first inline review bound to head `063c16ec` kept the PR at NOGO for three major behavior-contract gaps. Replies addressed prose-pinned follow-up assertions, restored plan/implementation-loop R0/R2 routing coverage, and fenced hostile TASK/TASK_REVIEW/DIFF/UNADDRESSED inputs. The final review bound to `cefd9d4f`; GO replaced NOGO, required checks passed independently, and conditional merge `3953a52` followed with native auto-merge null. |
 | **Issue #2377 / PR #2657** | verified-ci — the first review kept the PR at NOGO after finding that Ruff `TimeoutExpired` and process-launch `OSError` could escape the validator's structured failure contract. Follow-up head `2f7e4763` handled both paths with CLI-mode regression coverage; the reply handoff recorded the exact head and `thread_snapshot_sha256`, GO replaced NOGO, required checks passed, and conditional merge `0ae28c86` completed with native auto-merge null. |
+| **Issue #2381 / PR #2663** | verified-ci — the generated PR body said testing was not run by the automation pipeline, but live `unit-tests` and `required-checks-gate` passed on final head `a1a3f26b`. No GitHub review or issue-comment object existed; the durable audit was GO at `07:29:56Z`, required checks at `07:33:48Z`, and conditional merge commit `e8a6f40f` at `07:34:52Z` with native auto-merge null. |
 
 ## When to Use
 
@@ -76,6 +78,7 @@ tags:
 - A prior review round was exhausted or marked `state:skip`; re-entry must require a new pushed head and a fresh current-head review.
 - `state:implementation-go` appears before slow required checks finish, so merge-wait must retain the exact-head proof and wait without treating CI as review authorization.
 - A completed run needs an event audit that separates review evidence, GO/NOGO label transitions, required checks, and the final merge.
+- Generated PR prose says tests were not run, but live required checks may still establish merge readiness; the prose must not be treated as a check result.
 - `pr-policy` duplicates a commit-signature check already enforced by an active GitHub ruleset.
 - A required or advisory CI job reports auto-merge state but does not own the loop's GO label or final merge mutation.
 - A remediation round replies to several review threads and its durable handoff must not replay against a changed head or changed thread set.
@@ -218,6 +221,13 @@ CI/CD is outside the source-review decision:
     `79974e42`, NOGO changed to exclusive GO, the required-checks gate passed, and conditional
     merge `d993cc1b` completed with native auto-merge absent.
 
+23. Separate generated test prose from live merge readiness. A PR body saying “Testing Not run
+    by the automation pipeline” is an automation receipt, not evidence that repository checks
+    failed or were skipped. Audit live checks separately for merge readiness, while keeping them
+    outside GO authority. If the review path emits no GitHub review or issue-comment object,
+    record that observability fact and use the final head, durable GO label, required-check
+    completion, and merge event as the audit trail. PR #2663 / issue #2381 followed this path.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -282,6 +292,7 @@ CI/CD is outside the source-review decision:
 | PR #2636 / issue #2633 audit | Initial review on `413110f8` produced six threads and NOGO. Batch `fc7b2b5b633c9080d859c835f0acfe5d` journaled six replies against final head `79974e42`; all threads resolved and a final review bound to that head. GO replaced NOGO at `03:55:07Z` / `03:55:09Z`, `required-checks-gate` passed at `04:02:17Z`, and conditional merge `d993cc1b` landed at `04:03:10Z`; native auto-merge was null. |
 | PR #2651 / issue #2370 audit | Review objects were empty-body `COMMENTED` records bound to `063c16ec` then `cefd9d4f`; the final inline findings/replies were audit evidence, not authorization. Durable sequence: NOGO at `01:08:20Z`, GO at `01:34:43Z`, NOGO removal at `01:34:44Z`, all required checks passed, and merge commit `3953a52` landed at `01:37:27Z`; post-merge `autoMergeRequest` was null. |
 | PR #2657 / issue #2377 audit | The initial review found an incomplete subprocess exception boundary and left the PR at NOGO. The remediation reply was journaled against head `2f7e4763` with batch nonce `f35cdfcb` and thread snapshot `490835fc`; `state:implementation-go` replaced NOGO, `pr-policy`, unit tests, and `required-checks-gate` passed, and merge-wait conditionally squash-merged the reviewed path as `0ae28c86` with native auto-merge null. |
+| PR #2663 / issue #2381 audit | Generated PR prose reported no automation-pipeline testing, but live `unit-tests` and `required-checks-gate` passed on final head `a1a3f26b`. GitHub exposed no review or issue-comment object; GO was labeled at `07:29:56Z`, checks completed at `07:33:48Z`, and merge commit `e8a6f40f` followed at `07:34:52Z` with native auto-merge null. |
 
 ## Verified On
 
@@ -299,3 +310,4 @@ CI/CD is outside the source-review decision:
 | ProjectHephaestus | Issue #2633 / PR #2636 | Verified-ci nonblocking review/merge path. Closed GitHub worker jobs preserved journal-before-delivery ordering, request/receipt identity, exact-head review, late-thread checks, and conditional-merge accounting. Final head `79974e422321f2ce0f840764f7a09bd6ca2f585b` reached zero unresolved threads, exclusive GO, all required checks, and squash merge `d993cc1bfc6334ba9ced45452c4f98f08303b453`. |
 | ProjectHephaestus | Issue #2370 / PR #2651 | Verified-ci behavior-contract review path. The initial exact-head review on `063c16ec` returned NOGO for three major findings; head-bound replies corrected them, the final exact-head review on `cefd9d4f` allowed exclusive GO, and merge-wait conditionally merged `3953a52` after required checks, with no native auto-merge. |
 | ProjectHephaestus | Issue #2377 / PR #2657 | Verified-ci subprocess-failure review path. The initial review exposed timeout/process-launch exceptions outside the structured Ruff failure contract; the pushed remediation head added normal and JSON CLI coverage, the exact-head/thread-snapshot handoff preceded GO, required checks completed, and merge-wait produced `0ae28c860633d9f77d80ac12508ccf86b0a335fb`. |
+| ProjectHephaestus | Issue #2381 / PR #2663 | Verified-ci compact inline-review path. The generated PR body said testing was not run, but live required checks passed independently. No GitHub review/comment object existed; final head `a1a3f26b0de9343a187fe5c336af16d0883bc3fa` reached durable GO, required-check completion, and conditional merge `e8a6f40f72713c45a33a30098bc97d31708fc33d` with native auto-merge null. |
