@@ -1,9 +1,9 @@
 ---
 name: pr-review-loop-orchestration-agent-patterns
-description: "Use when: (1) building or debugging a Python implement-review loop where an LLM sub-agent reviews a PR and a fixer agent addresses inline comments, (2) a review loop resolves threads even though no commit was produced — resolution must be gated on a real commit not the model self-report, (3) a loop ends AMBIGUOUS or NO-GO too fast before ever earning an explicit GO verdict, (4) LLM or agent-generated inline PR review comments are rejected by GitHub (HTTP 422) because they do not lie on a changed diff hunk, (5) an agent-driven CI-fix session produces no commit and the PR stays red; the correct response is a single bounded retry with unresolved review threads injected verbatim, (6) a review fix plan file concludes no changes are needed and the automation should self-cancel without opening a new PR, (7) a feature-dev:code-reviewer sub-agent cannot execute shell commands and cannot post gh pr review — wrong agent type was chosen, (8) a GitHub GraphQL PR-review mutation field selection is wrong and the automation loop fails on every call with Field X does not exist, (9) pre-commit must cover the full PR diff from the merge-base not just the most-recent-edit files before pushing, (10) an existing-PR review handler short-circuits NO-GO PRs as if they were settled (idempotency `if has_go or has_no_go: skip`) so a failed-review PR never re-enters the loop — short-circuit on GO ONLY, (11) an existing-PR worktree sync fails `git fetch origin {issue}-auto-impl` with exit 128 because the PR head branch was ASSUMED from the issue number instead of read from the PR's real `headRefName`, (12) an in-loop LLM PR reviewer posts a FALSE policy violation (e.g. `POLICY VIOLATION: Closes, auto-merge-premature, signed-commits` on a PR that actually has `Closes #N`, auto-merge OFF, and a signed commit) because its policy fetch failed open to violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate (`pr-policy` required, `auto-merge-policy` advisory) already enforces, (13) an in-loop implementer review cycle (`_run_impl_review_loop`) converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO instead of re-reviewing up to `MAX_REVIEW_ITERATIONS` and auto-skipping only on TRUE exhaustion, (14) the address-review coordinator is handed a review thread the reviewer itself labels non-blocking / pre-existing / out-of-scope / follow-up-worthy, or that asks for an edit the approved plan explicitly scoped out (e.g. behind a 'count must not increase' verification guard) — the correct disposition is to leave the thread UNADDRESSED (out of the `addressed` set) as a follow-up issue and make NO code change, because resolving a comment means giving it a disposition, not necessarily editing code, (15) a run parks EVERY pr_review item to state:skip via 'zero-thread NOGO retry cap exhausted' or 'exhausted at round N (automation unresolved 0 -> 0)' and you suspect the reviewer model or verdict parsing — check each PR's hephaestus-pr-review-zero-thread-nogo anomaly comment FIRST: a summary like 'NOGO: ... head unchanged (Nth round)' means by-design stale-PR triage (#2079: deterministic no-progress NOGOs escalate to skip instead of burning implement budget), NOT a reviewer failure; only a FRESHLY-implemented PR parked this way indicates a real defect"
+description: "Use when: (1) building or debugging a Python implement-review loop where an LLM sub-agent reviews a PR and a fixer agent addresses inline comments, (2) a review loop resolves threads even though no commit was produced — resolution must be gated on a real commit not the model self-report, (3) a loop ends AMBIGUOUS or NO-GO too fast before ever earning an explicit GO verdict, (4) LLM or agent-generated inline PR review comments are rejected by GitHub (HTTP 422) because they do not lie on a changed diff hunk, (5) an agent-driven CI-fix session produces no commit and the PR stays red; the correct response is a single bounded retry with unresolved review threads injected verbatim, (6) a review fix plan file concludes no changes are needed and the automation should self-cancel without opening a new PR, (7) a feature-dev:code-reviewer sub-agent cannot execute shell commands and cannot post gh pr review — wrong agent type was chosen, (8) a GitHub GraphQL PR-review mutation field selection is wrong and the automation loop fails on every call with Field X does not exist, (9) pre-commit must cover the full PR diff from the merge-base not just the most-recent-edit files before pushing, (10) an existing-PR review handler short-circuits NO-GO PRs as if they were settled (idempotency `if has_go or has_no_go: skip`) so a failed-review PR never re-enters the loop — short-circuit on GO ONLY, (11) an existing-PR worktree sync fails `git fetch origin {issue}-auto-impl` with exit 128 because the PR head branch was ASSUMED from the issue number instead of read from the PR's real `headRefName`, (12) an in-loop LLM PR reviewer posts a FALSE policy violation (e.g. `POLICY VIOLATION: Closes, auto-merge-premature, signed-commits` on a PR that actually has `Closes #N`, auto-merge OFF, and a signed commit) because its policy fetch failed open to violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate (`pr-policy` required, `auto-merge-policy` advisory) already enforces, (13) an in-loop implementer review cycle (`_run_impl_review_loop`) converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO instead of re-reviewing up to `MAX_REVIEW_ITERATIONS` and auto-skipping only on TRUE exhaustion, (14) the address-review coordinator is handed a review thread the reviewer itself labels non-blocking / pre-existing / out-of-scope / follow-up-worthy, or that asks for an edit the approved plan explicitly scoped out (e.g. behind a 'count must not increase' verification guard) — the correct disposition is to leave the thread UNADDRESSED (out of the `addressed` set) as a follow-up issue and make NO code change, because resolving a comment means giving it a disposition, not necessarily editing code, (15) a run parks EVERY pr_review item to state:skip via 'zero-thread NOGO retry cap exhausted' or 'exhausted at round N (automation unresolved 0 -> 0)' and you suspect the reviewer model or verdict parsing — check each PR's hephaestus-pr-review-zero-thread-nogo anomaly comment FIRST: a summary like 'NOGO: ... head unchanged (Nth round)' means by-design stale-PR triage (#2079: deterministic no-progress NOGOs escalate to skip instead of burning implement budget), NOT a reviewer failure; only a FRESHLY-implemented PR parked this way indicates a real defect, (16) a review audit must collect every review-thread and nested comment page before deciding that no blocking evidence exists, (17) a queue merge must rebind the reviewed head before a normal conditional merge"
 category: ci-cd
-date: 2026-08-04
-version: "1.8.0"
+date: 2026-08-06
+version: "1.9.0"
 verification: verified-ci
 user-invocable: false
 history: pr-review-loop-orchestration-agent-patterns.history
@@ -58,6 +58,10 @@ tags:
   - review-reply-handoff
   - thread-snapshot
   - merge-commit-proof
+  - connection-pagination
+  - nested-review-comments
+  - review-evidence-completeness
+  - reviewed-head-rebind
   - homericintelligence
 ---
 
@@ -67,11 +71,11 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-04 |
-| **Objective** | Build and debug a Python implement-review loop that drives LLM sub-agents to review a PR and fix its inline comments, converging on an EVIDENCE-BASED `Verdict: GO`. Covers: commit-gated thread resolution, inline-comment diff-hunk (422) validation, one-shot no-commit retry with unresolved review threads injected, agent-type selection for review tasks, GraphQL field/input validation for PR-review mutations, self-cancelling review plans, full merge-base pre-commit scope, the existing-PR short-circuit being GO-ONLY (NO-GO PRs MUST re-enter the loop), using the PR's real `headRefName` for the worktree instead of an assumed `{issue}-auto-impl`, and the "zero threads != GO" rule applying to the LOOP's TERMINATION condition (a zero-thread non-GO pass RE-REVIEWS up to `MAX_REVIEW_ITERATIONS`; `state:skip` only on TRUE exhaustion). |
-| **Outcome** | Merged across multiple ProjectHephaestus PRs (commit-gate + verdict-GO convergence #1084; inline-comment 422 validation #1043; no-commit retry + thread injection #847; GraphQL field/input validation #906/#1006; existing-PR NO-GO re-review #1104; real PR head-branch resolution #1106; in-loop policy enforcement removed in favor of CI gates #1112; in-loop zero-thread non-GO re-reviews + `state:skip` only on exhaustion #1114), plus the completed review-to-merge audits for PRs #2610 and #2620. |
+| **Date** | 2026-08-06 |
+| **Objective** | Build and debug a Python implement-review loop that drives LLM sub-agents to review a PR and fix its inline comments, converging on an EVIDENCE-BASED `Verdict: GO`. Covers commit-gated thread resolution, complete pagination of review-thread and nested comment connections, head-bound review handoffs, and the queue's normal conditional merge path. |
+| **Outcome** | Merged across multiple ProjectHephaestus PRs, including issue #2390 / PR #2671, which verified complete review-evidence pagination followed by the loop-owned GO label, independent required checks, and a normal merge of the reviewed head with native auto-merge absent. |
 | **Verification** | verified-ci |
-| **Version** | 1.8.0 |
+| **Version** | 1.9.0 |
 
 ## When to Use
 
@@ -90,6 +94,8 @@ tags:
 - The address-review coordinator is handed a review thread the reviewer ITSELF labels non-blocking / pre-existing / out-of-scope for #N / follow-up-worthy, or a thread that asks for an edit the approved plan explicitly scoped out (often behind a "count must not increase" verification guard), and the per-comment loop pressure ("every comment MUST be resolved") tempts a fixer-dispatch + code edit.
 - You are auditing a completed run with `COMMENTED` review records, implementation state labels, required checks, and a merge event, and need to separate review evidence, loop authorization, and terminal merge state.
 - A completed queue run has a major inline finding, a later head-bound implementation reply, and a merge event; audit the current head, exclusive GO/NO-GO label transition, required checks, and merge commit in that order.
+- A review audit queries GitHub GraphQL connections for `reviewThreads` or nested `comments`; paginate both levels before concluding that no blocking evidence exists.
+- A queue has reached GO and must hand off to `merge_wait`; rebind the live PR head and merge conditionally by the reviewed SHA rather than treating review prose, CI, or a label as merge authority.
 
 ## Verified Workflow
 
@@ -352,10 +358,43 @@ Use the same event ordering for a second concrete queue-run example:
    exclusive loop-owned label transition was the authorization boundary.
 4. `pr-policy`, `auto-merge-policy`, `required-checks-gate`, unit/integration, lint,
    security, build, and the other required checks passed before merge_wait proceeded.
+
 5. The PR merged normally at 2026-08-04T14:26:12Z as merge commit
    `747bb4e1223bf1ed31c0e8ed65d79ef4752435c0`; `autoMergeRequest` was null and the head
    branch was deleted. Prove terminality from `state=MERGED` plus the merge event, not
    from review prose, approval state, or native auto-merge.
+
+#### Complete review evidence and reviewed-head merge handoff: issue #2390 / PR #2671
+
+GitHub GraphQL connections are partial by default. The review audit must paginate the
+outer `pullRequest.reviewThreads` connection and, for every thread, its nested
+`comments` connection. A first page that contains no unresolved finding is not evidence
+that later pages are empty.
+
+```text
+collect(connection):
+  cursor = null
+  repeat:
+    page = connection(first=100, after=cursor)
+    yield page.nodes
+    cursor = page.pageInfo.endCursor
+  until page.pageInfo.hasNextPage is false
+
+threads = collect(pullRequest.reviewThreads)
+comments = {thread.id: collect(thread.comments) for thread in threads}
+```
+
+After the complete snapshot is collected, the queue must:
+
+1. Review the immutable snapshot in the detached read-only context.
+2. Re-fetch the live PR and require the same open head, complete thread state, and an
+   exclusive `state:implementation-go` transition before authorization.
+3. In `merge_wait`, revalidate the process-local reviewed-head proof and call the normal
+   conditional merge pinned to that SHA. Do not use native auto-merge as a substitute.
+
+PR #2671 / issue #2390 completed this path: head `5e16b5b6…` merged as
+`ebde4269…`, required checks were green, `state:implementation-go` was present, and
+`autoMergeRequest` was null.
 
 #### Inline-comment diff-hunk 422 validation
 
@@ -540,6 +579,7 @@ recurring traps:
 | Converge the in-loop review cycle on zero posted threads + force `state:skip` on a single AMBIGUOUS | `_run_impl_review_loop` had `if not posted_thread_ids and not reopened: break` (converge regardless of verdict) and force-applied `state:skip` after one iteration-0 non-GO via `is_ambiguous` | A malformed/transient review with 0 threads ended the loop at R0 and stranded a fixable PR with `state:skip` — observed on #725 / PR #996, fed by the pre-#1112 false POLICY VIOLATION (only a `POLICY VIOLATION:` line, no `Verdict:` → AMBIGUOUS, 0 threads) | Re-review on a zero-thread non-GO pass up to `MAX_REVIEW_ITERATIONS` (no threads → skip the address step via `continue`); converge ONLY on GO; auto-skip ONLY on TRUE exhaustion (`iterations_run >= MAX_REVIEW_ITERATIONS and last_verdict != "GO"`). Distinguish zero-threads-posted (re-review) from address-step-resolved-nothing (`break`) (PR #1114). |
 | Dispatch a fixer sub-agent for every review thread because the coordinator prompt says "every comment MUST be resolved" | Treating "resolve" as "must edit code", including for a thread the reviewer labelled non-blocking / pre-existing / out-of-scope | The requested edit (`pixi shell -e dev` in `CONTRIBUTING.md:63` / `README.md:494`) was pre-existing drift the approved plan EXPLICITLY scoped out behind a "count must not increase" guard; editing it would breach the plan and re-introduce scope-creep (PR #1245 / #1216) | Resolving a thread = giving it a disposition. "Not addressable in code within this issue's scope → follow-up issue" is a valid resolution; leave it out of `addressed` and change nothing (verified-local). |
 | Treat a review label or reply as valid after the PR head changes | Read the initial NO-GO/GO state without checking the reply's head against the current PR head | PR #2620 required another implementation pass after a major finding; the durable reply named the final head and its thread snapshot | Re-read `headRefOid` and require the implementation handoff's head/batch/thread markers to match before accepting the GO-label transition |
+| Read only the first page of review-thread or comment connections | Accepted an empty first page as proof that the PR had no later review evidence | GitHub GraphQL connections are paginated; later threads or comments can contain the finding or reply needed for a correct disposition | Traverse every page of both `reviewThreads` and each thread's `comments` before review, reconciliation, or GO authorization (issue #2390 / PR #2671) |
 | Edit the redirect target's content because the anchor was correct | Saw a correct pointer to `CONTRIBUTING.md` / `README.md` and assumed the doc itself was THIS PR's defect to fix | A correct anchor to a doc whose downstream step is buggy is not a defect introduced by this PR; the reviewer themselves recommended a follow-up issue, not an in-PR fix | Distinguish the redirect/anchor (often correct) from the redirect target's content (the actual, out-of-scope complaint); honor the scope contract and emit `{"addressed": []}` (verified-local). |
 
 ## Results & Parameters
@@ -664,6 +704,14 @@ mutation {
 | Authorization | `state:implementation-go` added and NO-GO removed | Durable loop-owned GO gate |
 | Merge | Required checks green; merge commit `747bb4e1…`; `autoMergeRequest: null`; head deleted | `merge_wait` reached normal terminal merge |
 
+### Complete review-evidence collection and conditional merge (verified-ci)
+
+| Rule | Implementation | Why |
+|------|----------------|-----|
+| Paginate review evidence | Exhaust `reviewThreads` and every nested `comments` connection using `pageInfo.hasNextPage` and `endCursor` | A shallow query can hide a blocker or reply and create a false clean review |
+| Rebind before authorization | Compare the live `headRefOid` with the detached review snapshot, then require the exclusive `state:implementation-go` transition | Review prose and labels are not proof for a changed head |
+| Merge only the reviewed head | `merge_wait` revalidates the process-local proof and uses a normal SHA-conditional merge; `autoMergeRequest` remains absent | Prevents a later push or an externally armed auto-merge request from changing what was approved |
+
 ## Verified On
 
 | Project | Context | Details |
@@ -682,3 +730,4 @@ mutation {
 | gh-tidy (HaywardMorihara/gh-tidy) | PRs #63/#67/#68/#69 | Upstream bash PR review rounds; logic/safety traps (verified-local) |
 | ProjectHephaestus | Issue #2338 / PR #2610 (2026-08-04) | verified-ci; initial NO-GO, force-pushed final head, second informational `COMMENTED` review, loop-owned GO-label handoff, independent required checks, and normal squash merge with no native auto-merge |
 | ProjectHephaestus | Issue #2617 / PR #2620 (2026-08-04) | verified-ci; major inline NO-GO on incomplete cache validation, head-bound implementation reply (`faf34a3b…`), exclusive GO-label transition, required checks green, and normal merge commit `747bb4e1…` with no native auto-merge |
+| ProjectHephaestus | Issue #2390 / PR #2671 (2026-08-06) | verified-ci; complete pagination of review-thread and nested comment connections, exclusive `state:implementation-go`, required checks green, reviewed head `5e16b5b6…`, and normal merge commit `ebde4269…` with `autoMergeRequest: null` |
