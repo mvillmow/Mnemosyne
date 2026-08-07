@@ -1,10 +1,11 @@
 ---
 name: python-import-patterns-and-compatibility-guards
-description: "Use when: (1) a child module would create circular dependencies by importing the parent at module level — use function-local imports to defer the lookup and keep the import graph acyclic; (2) extending a public SDK surface with peer classes using lazy-loading __init__.py infrastructure (lazy exports pattern via __getattr__) to prevent eager-load regressions when adding new peers to __all__; (3) code uses a stdlib module added in a later Python version (tomllib in 3.11+, ExceptionGroup in 3.11+) and the CI matrix includes older Python — add a version-gated try/except import guard so the module remains importable; (4) adding cross-OS CI matrix and Windows jobs fail with ModuleNotFoundError for POSIX-only stdlib modules (curses, fcntl, grp, tzdata) — add conditional import guards and ensure tzdata is listed as an optional Windows dependency; (5) a hardcoded surface-pinning test (set(__all__) == literal) fails on CI with 'Extra items in the left set' because a peer export landed on main via an independent PR while your branch was open — fix the stale test literal, not the (correct) source, and use env -i / git stash / grep-the-CI-log to separate real failures from live-session environment noise; (6) a branch widening a lazy SDK surface (_LAZY_EXPORTS/__all__/__getattr__ in __init__.py) goes DIRTY/CONFLICTING on rebase because a sibling PR already landed the identical export — resolve by keeping ONE copy of the shared entry, and FIRST check mergeStateStatus=DIRTY when a PR reads as CI-failing but no test actually failed; (7) adding a DeprecationWarning at ACCESS time (not just call time) for a deprecated lazy shim exposed via a PEP 562 package __getattr__ loader — grep the named symbol against the source first because the issue may misname the mechanism (in _LAZY_IMPORTS vs __all__), keep access-time and call-time warnings as complementary layers (both needed for different access paths), force a fresh resolve in the regression test via module.__dict__.pop(name) because PEP 562 caches into globals, rewrite any stale-tolerant test that documents the current silent behavior, use stacklevel=2 inside __getattr__ (verified: user line → __getattr__ → warn, so stacklevel=2 attributes to user's access line), and update the prose deprecation doc (COMPATIBILITY.md) in the same PR (verified-local, ProjectHephaestus issue #1545); (8) EXECUTING an audit-finding fix that PROMOTES existing public-looking symbols into a package's declared __all__ — scope creep is intentional: when the issue names a subset of affected symbols but the same defect class applies to sibling symbols in the same module, fix ALL of them in one PR (e.g. issue #1511 named add_dry_run_arg + DRY_RUN_HELP_CAVEAT but add_github_throttle_args + configure_github_throttle_from_args had the identical gap; fixing all four so set(utils.__all__) == set(cli.__all__) prevents re-triggering the same audit finding); choose EAGER re-export (plain 'from … import (…)' in __init__.py) when the source module pulls only stdlib — no need for _LAZY_EXPORTS infrastructure; NO COMPATIBILITY.md change is needed when the package has no per-symbol table (only a tier entry); pin the test with a SUBSET ASSERTION (set(submodule.__all__) - set(pkg.__all__) must be empty, not strict equality) so parallel PRs adding new symbols cannot break the pin; do NOT guess the COMPATIBILITY.md 'Added' version from the latest git tag (check RELEASING.md/milestones/roadmap or flag for reviewer), grep the WHOLE test tree (not just the obvious file) for a strict-equality surface pin before widening __all__ because the breakage is non-local, verify the audit's stability-tier premise on disk (audit findings can be factually wrong), assert re-export IDENTITY (pkg.sym is submodule.sym) and grep for existing patch(\"pkg.submodule...\") usages, and include test_import_surface.py/test_automation_boundary.py in the verification set for any __init__.py widening (verified-local, executed end-to-end for ProjectHephaestus issue #1511; planning-guidance for COMPATIBILITY.md version-stamping derived from plan for issue #1513 remains unverified); (9) PLANNING the companion module-level __dir__() for a PEP 562 lazy-loader package whose __getattr__ lazily resolves symbols but whose dir(pkg) shows only eagerly-bound names — define __dir__() returning sorted(set(_LAZY_IMPORTS) | set(__all__) | set(globals())) so the entire lazy public API is discoverable to IPython tab-completion / IDEs / doc generators; CRITICAL: a custom __dir__ REPLACES (does not merge with) the default listing, so you MUST fold set(globals()) in or you silently REMOVE today-visible names (__version__, __author__, dunders, already-cached lazy names); __dir__ returns names only and performs NO attribute access, so a deprecated lazy shim can be listed without firing its DeprecationWarning; pin the contract by SUBSET INVARIANT (set(_LAZY_IMPORTS) <= set(dir(pkg))) not a hardcoded count (the audit's '35 symbols' was already stale at 40); regression-test that dir() does not SHRINK the visible set; extend the existing surface test file, do not create a parallel one (unverified planning-guidance, derived from a plan for ProjectHephaestus issue #1512); (10) EXECUTING a fix that adds a single public symbol to a package __all__ in a repo that has a per-symbol COMPATIBILITY.md API table guarded by a live-tree-scanning validation test (e.g. hephaestus tests/unit/validation/test_api_table_docs.py — TestLiveTreeAlignment::test_real_compatibility_md_is_aligned / TestMain::test_main_returns_zero_on_real_repo) — adding the name to __all__ (and re-exporting it from the package __init__.py __all__) WITHOUT adding a matching COMPATIBILITY.md row fails with '[missing-from-docs] <pkg>.<name> is in __all__ but has no row in COMPATIBILITY.md'; the FIX is to add an ALPHABETICAL row to the right '### <pkg>' section with a 'since' version column resolved from sibling helpers added in the same release cycle (NOT blindly from `git describe --tags --abbrev=0` — verify against siblings, e.g. configure_cli_logging took 0.9.8 because create_validation_parser/resolve_repo_root in the same cycle used 0.9.8 even though the latest tag was v0.9.7). CRITICAL FULL-SUITE-ONLY HAZARD: this live-tree alignment test scans the actual on-disk __all__ + COMPATIBILITY.md at scan time, so it can PASS when run in ISOLATION (`pytest …::test_real_compatibility_md_is_aligned` alone) yet reliably FAIL only when you run the WHOLE module / the broad tests/unit/validation suite WITH the change applied — an isolated green run is a FALSE NEGATIVE. After editing ANY package __all__ or [project.scripts]/public-export surface, run the full module that owns the live-tree alignment check (here `pixi run python -m pytest tests/unit/validation/test_api_table_docs.py -q --no-cov`) before claiming green; never trust an isolated test run for live-tree-scanning validation tests (verified-local, ProjectHephaestus issue #1419). This UPGRADES the previously-unverified COMPATIBILITY.md per-symbol version-stamping guidance from issue #1513 to verified-local: issue #1419 executed the per-symbol-row addition end-to-end and confirmed the version column is resolved from same-cycle siblings, not the latest tag. SECONDARY (cross-link, not its own skill): the issue #1419 body + approved plan predated sibling PR #1637 which had ALREADY merged most of the work with a WIDER create_validation_parser API (kept include_repo_root/prog/usage/epilog/formatter_class that the plan said to drop) — do NOT reverse merged code to satisfy a stale plan; grep the CURRENT state and implement only the genuinely-unimplemented slice (reinforces dry-refactoring-workflow's 'issue bodies/plans go stale'); (11) a repository has raised its minimum supported Python so historical stdlib backports are obsolete, or production code bypasses an existing canonical import resolver — reconcile imports with the declared floor, keep platform data dependencies such as tzdata distinct from import backports, and pin resolver use with seam tests."
+description: "Use when managing Python import compatibility, public lazy exports, circular dependencies, or package import regressions. Includes function-local imports, PEP 562 surfaces, version/platform guards, re-export identity, and whole-package AST import graphs with SCC detection that account for nested imports, resolvable child modules, lazy-export maps, and compatibility façades."
 category: architecture
-date: 2026-08-05
-version: "1.9.0"
+date: 2026-08-07
+version: "1.10.0"
 user-invocable: false
+verification: unverified
 history: python-import-patterns-and-compatibility-guards.history
 tags:
   - import-strategy
@@ -60,6 +61,10 @@ tags:
   - canonical-resolver
   - zoneinfo
   - backport-removal
+  - import-graph
+  - strongly-connected-components
+  - package-facade
+  - lazy-export-graph
 ---
 
 # Python Import Patterns and Compatibility Guards
@@ -78,6 +83,11 @@ stdlib backports when a repository's declared Python floor already guarantees th
 and for routing remaining production imports through an existing canonical resolver. Earlier
 verified sections retain their recorded confidence. [History](./python-import-patterns-and-compatibility-guards.history).
 
+**v1.10.0 amendment:** Section J adds unverified planning guidance for eliminating package
+cycles through dependency-neutral leaf modules and enforcing the result with a reusable AST
+graph plus strongly connected component guard. Earlier verified sections retain their recorded
+confidence. [History](./python-import-patterns-and-compatibility-guards.history).
+
 ## When to Use
 
 - **Function-local imports (coupling avoidance)**: A child module needs ambient state from a parent module (e.g., `logging.utils` already imports `utils.helpers`), and a module-level child-to-parent import would create a circular dependency or import-graph bloat. The import is used in only one or two functions.
@@ -92,6 +102,7 @@ verified sections retain their recorded confidence. [History](./python-import-pa
 - **Adding the companion `__dir__()` to a PEP 562 lazy-loader package — discoverability fix (unverified planning-guidance)**: A package defines a module-level `__getattr__` for lazy loading (PEP 562), but defines no module-level `__dir__()`, so `dir(pkg)` shows only the eagerly-bound names (~4: `__version__`, `__author__`, dunders) and the entire lazy public API (everything in `_LAZY_IMPORTS` / `__all__`) is invisible to IPython tab-completion, IDEs, and doc generators. This is a POLA/discoverability defect, not a correctness bug. The fix adds `def __dir__() -> list[str]: return sorted(set(_LAZY_IMPORTS) | set(__all__) | set(globals()))` and pins it with a surface test. The planning traps: a custom `__dir__` REPLACES the default listing (it does not auto-union module globals), so you MUST fold `set(globals())` in or you silently SHRINK the visible set; `__dir__` returns names only (no attribute access), so listing a deprecated lazy shim does NOT fire its `DeprecationWarning`; pin by a SUBSET INVARIANT (`set(_LAZY_IMPORTS) <= set(dir(pkg))`), never a hardcoded count (the audit's "35 symbols" was already stale at 40 on disk); and regression-test that `dir()` does not SHRINK vs today (`__version__`/`__author__` must remain). See section H. (Derived from a plan for ProjectHephaestus issue #1512; this guidance is `unverified` — the plan has not been executed in CI.)
 
 - **Retiring obsolete compatibility guards / enforcing canonical resolvers (unverified planning-guidance)**: The declared minimum Python already includes a formerly version-gated stdlib module, but production code still carries a backport branch; or a shared resolver exists and a few consumers import the module directly. Read the support floor and CI matrix first, delete only guards made unreachable by that contract, keep platform data packages such as `tzdata` when runtime data still needs them, and route all consumers through the canonical resolver so import policy has one owner. See section I.
+- **Enforcing a whole-package acyclic import graph (unverified planning-guidance)**: A cycle spans entrypoints, adapters, package initializers, function-local imports, or PEP 562 lazy-export maps, so a prefix scan or cold-import test can miss it. Extract low-level execution and identity helpers into a dependency-neutral leaf, preserve compatibility by identity re-export, make package-attribute imports explicit, and add an AST graph guard with SCC detection plus synthetic false-negative fixtures. See section J.
 
 ## Verified Workflow
 
@@ -624,6 +635,106 @@ The deliberate asymmetry is the key: `tomllib` consumers use the existing canoni
 `ZoneInfo` imports directly because the Python floor guarantees it and no shared resolver owns
 a broader policy. Do not preserve an unreachable backport merely for symmetry.
 
+#### J. Whole-package AST import graph and neutral-leaf cycle repair — UNVERIFIED planning-guidance
+
+> **Warning:** This workflow has not been validated end-to-end. Treat it as a hypothesis until
+> implementation tests and CI confirm it. It was derived from the reviewed ProjectHephaestus
+> issue #2363 plan; the current tree did not yet contain the proposed `git_runtime.py` or graph
+> guard when this amendment was captured.
+
+Use this workflow when a cycle crosses several kinds of runtime edge and a simple forbidden-prefix
+scan is too weak. The repair and the guard are one atomic contract: dependency ownership changes
+remove the current cycle, while the graph test prevents a different path from recreating it.
+
+1. **Reconstruct the first reported cycle against the current tree.** Audit reports and line
+   numbers go stale. Confirm every named module still exists and every edge still resolves before
+   editing. If an historical edge was already replaced, preserve that production replacement and
+   add an exact cold-import regression for both import orders; do not recreate a deleted shim or
+   introduce a second construction path merely to match the old report.
+
+2. **Move only dependency-neutral behavior into a leaf module.** Subprocess execution, repository
+   identity parsing, caches, cache clearing, and reference formatting can live below higher-level
+   Git and GitHub orchestration. The leaf must not import its parent automation package. Higher-level
+   modules import the leaf directly, while the former owner re-exports the same function objects:
+
+   ```python
+   from .git_runtime import (
+       clear_repo_caches as clear_repo_caches,
+       get_repo_info as get_repo_info,
+       get_repo_root as get_repo_root,
+       get_repo_slug as get_repo_slug,
+       issue_ref as issue_ref,
+       pr_ref as pr_ref,
+       run as run,
+   )
+   ```
+
+   Pin both identity and signature compatibility. A wrapper preserves a call shape but changes
+   object identity and can break patch paths; an explicit re-export preserves both.
+
+3. **Remove fallback dependencies when the adapter already owns the behavior.** If a transport
+   already provides label creation, addition, removal, payload parsing, and readback, route scoped
+   and unscoped callers through those primitives. Preserve dry-run behavior and fail closed when
+   exclusive-state readback is inconsistent. Test behavior through mocked transport calls rather
+   than asserting delegation to a legacy manager.
+
+4. **Make runtime ownership explicit.** Replace imports such as
+   `from hephaestus.automation import collaborator` with direct module imports. Keep existing PEP
+   562 export maps unchanged for public compatibility, but do not make production modules depend
+   on package attribute lookup when they mean a concrete collaborator module.
+
+5. **Build the graph from every Python module, including `__init__.py`.** Derive canonical module
+   names from paths, enumerate all package and child modules first, then parse every file. Traverse
+   the complete AST so function-local and class-body imports are runtime edges. Exclude only the
+   body of runtime-inert `if TYPE_CHECKING:` branches; traverse the `else` branch because it runs.
+
+6. **Resolve imports conservatively.** Resolve absolute and relative `ImportFrom` nodes against the
+   importing module/package. For `from package import submodule`, retain the edge to `package` and,
+   when `package.submodule` is a discovered module, also retain that child edge. This catches
+   child-to-ancestor cycles and package-attribute imports without inventing edges for ordinary
+   imported attributes.
+
+7. **Treat lazy exports as executable edges.** Read string module targets from both assigned and
+   annotated `_LAZY_EXPORTS` dictionaries. PEP 562 delays an import but does not remove it from the
+   runtime graph. Synthetic fixtures must cover both assignment forms so a later annotation change
+   cannot silently weaken the guard.
+
+8. **Normalize compatibility façades as components, not allowlisted holes.** When a package
+   `__init__.py` intentionally routes implementation-child calls through its package namespace to
+   preserve patch seams, map the façade and its implementation children to one component before
+   SCC analysis. Ignore only edges internal to that component. Retain every incoming and outgoing
+   edge so normalization cannot hide a real cycle through the rest of the package.
+
+9. **Detect strongly connected components and self-loops.** Run Tarjan or Kosaraju over the
+   normalized internal graph. Report every component with more than one node and any one-node
+   component with an explicit self-edge. A topological sort that merely leaves nodes behind is less
+   actionable because it does not identify each cycle component precisely.
+
+10. **Test the graph builder with adversarial synthetic packages.** Use the same builder for the
+    real-tree assertion and temporary fixtures for function-local cycles, child-to-ancestor cycles,
+    `from package import submodule`, assigned lazy exports, and annotated lazy exports. These tests
+    prove the scanner sees the edge classes it claims to enforce; an acyclic real tree alone can pass
+    when the scanner is blind.
+
+11. **Ship compatibility and graph enforcement atomically.** Run focused runtime/helper, adapter,
+    import-order, graph, and architecture-boundary suites, then lint and type-check every changed
+    file. If re-export identity/signatures or unscoped adapter parity fail, restore the original
+    import targets and fallback branches together before redesigning the seam. Do not weaken the
+    graph builder or add an exception for the failing path.
+
+Proposed acceptance commands for the motivating Hephaestus case:
+
+```bash
+uv run pytest tests/unit/validation/test_automation_import_graph.py \
+  tests/unit/automation/test_git_runtime.py \
+  tests/unit/automation/test_git_utils.py \
+  tests/unit/automation/test_pipeline_github.py --no-cov -q
+
+uv run pytest tests/unit/validation/test_automation_boundary.py \
+  tests/unit/validation/test_import_surface.py \
+  tests/unit/automation/pipeline/test_zero_io_imports.py --no-cov -q
+```
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -671,6 +782,10 @@ a broader policy. Do not preserve an unreachable backport merely for symmetry.
 | Kept a `backports.zoneinfo` fallback after the repository raised its minimum Python to 3.13 | Preserved a historical compatibility branch "just in case" | The branch is unreachable under the declared install contract and obscures the real Windows concern, which is timezone data rather than import availability | Remove guards made obsolete by the enforced floor; keep `tzdata` when platforms still need IANA data. `unverified` (ProjectHephaestus capability-resolution plan) |
 | Replaced every guaranteed stdlib use with a direct import | Changed the remaining `tomllib` consumers to `import tomllib` because Python 3.13 guarantees it | The repository already had `import_tomllib()` as the canonical policy seam; direct imports bypassed consistency and made resolver-seam tests impossible | A guaranteed stdlib module may still belong behind an existing shared resolver. Consolidate consumers first; simplify the resolver separately if warranted. `unverified` |
 | Tested resolver adoption only with valid TOML | Parsed a normal `pyproject.toml` and asserted the expected result | The test still passes if a consumer silently resumes a direct `tomllib` import, so it does not pin the seam | Feed invalid TOML and inject a fake parser through `import_tomllib`; success then proves the resolver was called. `unverified` |
+| Scan only `tree.body` or module-top imports | Built a fast import inventory from top-level AST statements | Function-local and class-body runtime imports disappear from the graph, so a real cycle can pass the guard | Traverse the full AST and exclude only runtime-inert `TYPE_CHECKING` bodies. `unverified` |
+| Record only the package edge for `from package import submodule` | Treated every imported name as an attribute | Python may resolve a discovered child module, so omitting `package.submodule` hides child-to-ancestor cycles | Keep the package edge and add the resolvable child edge. `unverified` |
+| Ignore a compatibility façade wholesale | Allowlisted `github_api` because its package-level routing is intentional | Removing the component also removes incoming and outgoing dependencies, hiding cycles through unrelated modules | Collapse façade and implementation children into one component; ignore only internal edges. `unverified` |
+| Assert only that the real tree is acyclic | Ran the graph builder on a currently acyclic package | A blind scanner also reports no cycles, producing a false sense of enforcement | Add synthetic cycle fixtures for every non-obvious edge class and run them through the same builder. `unverified` |
 
 ## Results & Parameters
 
@@ -920,11 +1035,27 @@ resolver-seam unit tests for both remaining production bypasses, a source assert
 `backports.zoneinfo`, and the existing rate-limit tests. These checks were supplied as a plan
 only and remain unverified.
 
+### Whole-package import graph parameters (unverified v1.10.0 guidance)
+
+| Parameter | Required behavior |
+|-----------|-------------------|
+| Source population | Every `**/*.py`, including package initializers |
+| Runtime import traversal | Full AST; skip only `TYPE_CHECKING` bodies |
+| Relative imports | Resolve from the importing module/package |
+| `from package import submodule` | Keep package edge plus resolvable child edge |
+| Lazy exports | Read string targets from assigned and annotated `_LAZY_EXPORTS` dictionaries |
+| Compatibility façade | Normalize façade plus implementation children as one component |
+| Cycle detector | SCCs of size >1 plus explicit self-loops |
+| Regression fixtures | Local, ancestor, child-submodule, assigned-lazy, annotated-lazy cycles |
+| Compatibility pin | Re-export object identity and `inspect.signature` equality |
+| Import smoke | Fresh subprocesses in both historical import orders |
+
 ## Verified On
 
 | Project | Context | Details |
 |---------|---------|---------|
 | ProjectHephaestus | Shared TOML/PyYAML capability-resolution and Python 3.13 floor cleanup plan | **PLAN ONLY / unverified** (section I). Proposed: route the final production `tomllib` consumers through `import_tomllib()`, remove the obsolete `backports.zoneinfo` branch in favor of direct stdlib `ZoneInfo`, preserve Windows `tzdata`, and add invalid-input resolver-seam tests. No implementation, local test run, or CI evidence was observed. |
+| ProjectHephaestus | Issue #2363 — eliminate automation import cycles with neutral Git runtime helpers and an AST SCC guard | **PLAN ONLY / unverified** (section J). The reviewed plan preserves the already-landed removal of the historical `_review_phase.py` edge, extracts subprocess/repository identity below `git_utils` and `pr_manager`, removes legacy adapter label fallbacks, makes package-attribute imports explicit, and proposes real-tree plus synthetic SCC regressions. No implementation, local test run, or CI evidence was observed. |
 | ProjectHephaestus | PR #633 — correlation_id propagation | Function-local import of `get_current_correlation_id` in `hephaestus/utils/helpers.py:170-172`; lint passes with no `noqa` |
 | ProjectHephaestus | Issue #799 / PR #988 — lazy-export add/add rebase conflict | Branch `799-auto-impl` widened `_LAZY_EXPORTS`/`__all__` in `hephaestus/automation/__init__.py`; main had already added the same `"PRReviewer"` entry via #968/#775 → PR read CI-failing but `mergeStateStatus=DIRTY` was the real blocker. Rebased onto origin/main (only `__init__.py` conflicted; `test_package_imports.py` rebased clean), kept ONE `"PRReviewer"` copy, set()-based surface tests ignored key order. Full suite 4136 passed / 19 skipped; pre-commit reflowed one f-string line; GPG-signed. **verified-local** |
 | ProjectHephaestus | Issue #775 / PR #968 — widen automation SDK surface | Exposed PlanReviewer, AddressReviewer, CIDriver (+Options) via `__all__`/`_LAZY_EXPORTS`/`_PHASE_ENTRYPOINTS`; surface-pinning test; 1081 automation tests pass |
