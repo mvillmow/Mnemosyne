@@ -1,9 +1,9 @@
 ---
 name: gha-security-scanning-supply-chain
-description: "Use when: (1) adding CodeQL SAST to TypeScript/JavaScript workflows or Semgrep/Gitleaks to any PR pipeline, (2) CI security scans only trigger on push to main — not PRs — and need promotion to PR gates, (3) Gitleaks SARIF parsing uses grep instead of jq causing always-fail required checks, (4) enforcing pinned SHA-based action versions instead of mutable tags, (5) auditing or porting curl|bash installers with SHA-256 verification, (6) a GHA job fails at 'Set up job' due to unresolved transitive action dependency, (7) adding Bandit SAST as a required CI check for Python/pixi projects, (8) triaging and remediating CodeQL PR alerts when gh reports a check-run id instead of a workflow run id, (9) planning a SARIF -> GitHub Code Scanning (Security tab) upload via upload-sarif (gitleaks/trivy/codeql) and need a planning-stage verification checklist, (10) maintaining an allowlisted Bandit LOW-severity baseline that must fail closed on regressions, reductions, malformed JSON, or unreviewed updates."
+description: "Use when: (1) adding CodeQL SAST to TypeScript/JavaScript workflows or Semgrep/Gitleaks to any PR pipeline, (2) CI security scans only trigger on push to main — not PRs — and need promotion to PR gates, (3) Gitleaks SARIF parsing uses grep instead of jq causing always-fail required checks, (4) enforcing pinned SHA-based action versions instead of mutable tags, (5) auditing or porting curl|bash installers with SHA-256 verification, (6) a GHA job fails at 'Set up job' due to unresolved transitive action dependency, (7) adding Bandit SAST as a required CI check for Python/pixi projects, (8) triaging and remediating CodeQL PR alerts when gh reports a check-run id instead of a workflow run id, (9) planning a SARIF -> GitHub Code Scanning (Security tab) upload via upload-sarif (gitleaks/trivy/codeql) and need a planning-stage verification checklist, (10) maintaining an allowlisted Bandit LOW-severity baseline that must fail closed on regressions, reductions, malformed JSON, or unreviewed updates, (11) extending zizmor coverage from workflows to tracked composite Actions without losing command parity, pinning, or least-privilege audits."
 category: ci-cd
-date: 2026-08-06
-version: "1.5.0"
+date: 2026-08-07
+version: "1.6.0"
 user-invocable: false
 history: gha-security-scanning-supply-chain.history
 verification: verified-local
@@ -45,6 +45,9 @@ tags:
   - duplicate-json-keys
   - atomic-write
   - review-reference
+  - zizmor
+  - composite-actions
+  - regression-testing
 ---
 
 # GitHub Actions Security Scanning and Supply-Chain Hardening
@@ -53,10 +56,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| Date | 2026-08-06 |
-| Objective | Set up security scanning (CodeQL/Semgrep/Gitleaks SAST + secrets + Bandit Python SAST), harden CI supply-chain (action SHA pinning, dependency scanning), and pin/verify curl\|bash installers with SHA-256 |
-| Outcome | Consolidated guidance for security gate setup, scan-trigger gaps, SARIF parsing fixes, action SHA pinning, transitive-pin diagnosis, installer trust-model hardening, Bandit SAST integration for Python/pixi projects, CodeQL PR alert remediation, planning-stage verification for SARIF uploads, and a proposed fail-closed Bandit LOW-baseline maintenance contract |
-| Verification | verified-local for established workflows; the Bandit LOW-baseline amendment is unverified and explicitly proposed |
+| Date | 2026-08-07 |
+| Objective | Set up security scanning (CodeQL/Semgrep/Gitleaks/zizmor SAST + secrets + Bandit Python SAST), harden CI supply-chain (action SHA pinning, dependency scanning), and pin/verify curl\|bash installers with SHA-256 |
+| Outcome | Consolidated guidance for security gate setup, scan-trigger gaps, SARIF parsing fixes, action SHA pinning, transitive-pin diagnosis, installer hardening, Bandit integration and LOW-baseline maintenance, CodeQL remediation, SARIF upload planning, and proposed deterministic zizmor coverage for workflows plus tracked composite Actions |
+| Verification | verified-local for established workflows; the Bandit LOW-baseline and zizmor composite-coverage amendments are unverified and explicitly proposed |
 
 ## When to Use
 
@@ -83,6 +86,10 @@ tags:
 - Maintaining a reviewed Bandit LOW-severity count baseline where increases are regressions,
   reductions are stale entries, malformed data must fail closed, and updates require an issue or
   pull-request reference
+- Extending a zizmor gate from `.github/workflows/` to composite Actions while keeping required CI,
+  local pre-commit, and scheduled security scans aligned
+- Adding regression tests that inventory every tracked composite Action repository-wide, detect
+  scan-root or trigger drift, and behaviorally prove pinning and least-privilege audits stay active
 
 ## Verified Workflow
 
@@ -91,6 +98,13 @@ tags:
 ```bash
 # Audit unpinned action refs (search ALL of .github/, not just workflows/)
 grep -rn "uses:.*@v[0-9]" .github/
+
+# Required CI and pre-commit: exact offline command parity after shlex.split()
+uv run zizmor --no-online-audits --min-severity medium \
+  .github/workflows/ .github/actions/
+
+# Scheduled security scan: preserve online audits while targeting the same roots
+uv run zizmor --min-severity medium .github/workflows/ .github/actions/
 
 # Resolve action tag to commit SHA (handle lightweight + annotated tags)
 RESULT=$(gh api repos/OWNER/REPO/git/ref/tags/vX.Y.Z --jq '.object | {sha,type}')
@@ -408,6 +422,75 @@ uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
 
 Use `sed -i` (not the Edit tool) for workflow edits — pre-commit security hooks block interactive
 edits of `.github/workflows/*.yml`.
+
+## Proposed Workflow: Extend zizmor to tracked composite Actions
+
+> **Warning:** This workflow has not been validated end-to-end. Treat it as a hypothesis until the
+> configuration tests, real two-root scan, local hook, and CI all pass.
+
+Composite Actions are executable GitHub Actions definitions, so a workflow-only zizmor target
+leaves a real supply-chain surface unscanned. Extend the existing scanner entry points instead of
+adding another scanner or abstraction:
+
+1. Define the two production roots once in regression tests:
+   `(".github/workflows/", ".github/actions/")`.
+2. Require required CI and the local pre-commit hook to have identical tokenized commands after
+   `shlex.split()`: `uv run zizmor --no-online-audits --min-severity medium` followed by both roots.
+   Keep `pass_filenames: false`, so a change in either root runs the complete scan.
+3. Use a pre-commit trigger such as `^\.github/(workflows|actions)/.*\.ya?ml$` so Action manifests
+   trigger the same full scan as workflows.
+4. Give the weekly security job the same roots and severity but omit `--no-online-audits`; the
+   scheduled job preserves API-backed audits while the required PR gate stays deterministic and
+   network-free.
+5. Inventory canonical tracked Action manifests repository-wide using fixed-argv
+   `git ls-files`, select files named `action.yml` or `action.yaml`, parse YAML, and classify only
+   manifests with `runs.using: composite`. Do not inventory only configured roots: that would make
+   the regression test confirm the scanner's own blind spot.
+6. Subtract only deliberate non-production fixtures from the production inventory. Assert every
+   allowlisted path is tracked, parses as composite, and exactly equals the composite manifests in
+   the fixture directory; this prevents stale or misclassified exemptions.
+7. Assert each production composite manifest starts with a configured scan root and matches the
+   pre-commit `files` regex. These tests make a future Action outside the roots, or trigger drift,
+   fail deterministically.
+8. Behaviorally exercise the project-managed zizmor executable adjacent to `sys.executable` with
+   fixed trusted arguments, fixture YAML on stdin, a disposable working directory, and `env={}`:
+
+   ```python
+   completed = subprocess.run(
+       [
+           str(Path(sys.executable).with_name("zizmor")),
+           "--offline",
+           "--no-config",
+           "--no-ignores",
+           "--min-severity",
+           "medium",
+           "--format=json-v1",
+           "-",
+       ],
+       cwd=tmp_path,
+       env={},
+       input=fixture.read_text(encoding="utf-8"),
+       capture_output=True,
+       text=True,
+       check=False,
+   )
+   assert completed.returncode in {11, 12, 13, 14}
+   ```
+
+   An unsafe workflow fixture should report `unpinned-uses` and `excessive-permissions`; an unsafe
+   composite Action fixture should report `unpinned-uses`. Keep least-privilege permission checks at
+   the workflow boundary because composite Actions inherit token permissions from their callers.
+9. Preserve a separate full-SHA regression assertion for a real composite Action dependency. The
+   scanner fixture proves the rule is active; the production assertion proves the actual reference
+   remains immutable.
+10. Run the real two-root offline scan after changing configuration. Remediate valid findings without
+    narrowing roots, lowering severity, or disabling audits. Any necessary suppression should be
+    line-scoped, rule-specific, and justified.
+
+Do not set `ZIZMOR_OFFLINE=1` for isolated fixture scans. Use the explicit `--offline` flag; the
+environment variable value is rejected by zizmor 1.28's boolean parser. `--no-config`,
+`--no-ignores`, `env={}`, stdin input, and a disposable cwd also prevent ambient credentials or
+configuration from changing the observed audit IDs.
 
 #### E. Diagnose transitive action-pin failures
 
@@ -728,8 +811,29 @@ uv run python <baseline-checker>.py \
 | Updated the baseline automatically on mismatch | Rewrote counts from the latest report during CI or ordinary comparison | A regression can normalize itself into future green runs without security review | Keep comparison read-only; require explicit update mode plus a non-empty issue/PR review reference |
 | Wrote the baseline directly | Truncated and rewrote the JSON file in place | An interrupted write can leave the security policy unreadable or partially updated | Validate first, serialize deterministically, then use an atomic safe-write helper |
 | Used one nonzero exit for drift and invalid input | Returned exit 1 for mismatches, missing files, and malformed JSON | CI and operators cannot distinguish a reviewed-policy mismatch from an untrustworthy scanner result | Reserve 1 for regression/stale drift and 2 for malformed or unreadable input |
+| Workflow-only zizmor target | Scanned only `.github/workflows/` | Tracked composite Actions can contain external `uses:` references and remain outside the SAST gate | Target both `.github/workflows/` and `.github/actions/` in required CI, pre-commit, and the weekly scan |
+| Inventory derived from configured roots | Enumerated Action manifests only under `.github/actions/` | A future tracked production Action outside that root is invisible to both the scanner and its regression test | Inventory canonical `action.yml`/`action.yaml` manifests repository-wide with fixed-argv `git ls-files`, then assert production composites fall under scan roots |
+| `ZIZMOR_OFFLINE=1` in fixture subprocesses | Tried to force offline mode through an environment value | zizmor 1.28 rejects the value during boolean parsing, and inherited environment/config can make results nondeterministic | Use explicit `--offline --no-config --no-ignores`, `env={}`, stdin, and a disposable cwd |
+| Unchecked fixture exemption | Allowlisted a deliberately unsafe composite Action by path only | The exemption can become stale, untracked, or cease to be composite without failing tests | Assert every allowlist entry is tracked and composite, and exactly matches composite manifests in the fixture directory |
+| Composite-level permission assertion | Expected a composite manifest to declare least-privilege token permissions | Composite Actions inherit permissions from callers; the declaration belongs to the workflow | Test `excessive-permissions` with a workflow fixture while testing `unpinned-uses` with both workflow and composite fixtures |
 
 ## Results & Parameters
+
+### Proposed zizmor workflow and composite-Action contract
+
+| Setting | Value | Reason |
+|---------|-------|--------|
+| Required/pre-commit flags | `--no-online-audits --min-severity medium` | Deterministic network-free PR gate |
+| Required/pre-commit targets | `.github/workflows/ .github/actions/` | Scan workflows and composite Actions with exact argv parity |
+| Scheduled flags | `--min-severity medium` | Preserve API-backed online audits weekly |
+| Pre-commit trigger | `^\.github/(workflows\|actions)/.*\.ya?ml$` | Either surface runs the complete scan |
+| Inventory source | Fixed-argv `git ls-files` | Detect tracked Action manifests anywhere in the repository |
+| Canonical manifests | Basename `action.yml` or `action.yaml` with `runs.using: composite` | Avoid extension/path assumptions while classifying only composites |
+| Fixture isolation | adjacent executable, stdin, `--offline --no-config --no-ignores`, `env={}`, temporary cwd | Exclude ambient credentials, config, ignores, and path inference |
+| Finding exit codes | `11`, `12`, `13`, or `14` | Findings are expected in deliberately unsafe fixtures |
+| Composite fixture audit | `unpinned-uses` | Proves external-action pinning stays active in composite manifests |
+| Workflow fixture audits | `unpinned-uses`, `excessive-permissions` | Proves pinning and workflow least privilege stay active |
+| Verification | unverified | Proposed from a reviewed implementation design; local execution and CI are pending |
 
 ### Gitleaks version reference
 
@@ -852,3 +956,4 @@ jq '[.runs[].results[].ruleId] | unique' results.sarif # rule IDs
 | Sanitized PR session | CodeQL weak hashing + command injection remediation after a rebase | verified-ci (2026-06-19): CodeQL and validate gates green |
 | ProjectAgamemnon | Issue #269 — plan to upload gitleaks SARIF to the Code Scanning tab in `_required.yml` | verified-local (2026-06-19): plan-only — workflow read directly, NOT run through actionlint/CI; planning-stage `upload-sarif` checklist captured |
 | ProjectHephaestus | Plan for strict Bandit LOW-baseline drift detection and review-referenced updates | unverified (2026-08-06): implementation and CI were not executed; proposed contract captured for future validation |
+| ProjectHephaestus | Proposed zizmor coverage for workflows plus tracked composite Actions | unverified (2026-08-07): reviewed design only; implementation, real scan, local hook, and CI pending |
