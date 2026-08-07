@@ -1,39 +1,48 @@
-# Scoped audit: ProjectHephaestus issue #2375 / PR #2655
+# Scoped design note: explicit exact-head operator authorization
 
-This note records one verified direct-implementation run for the canonical
-`automation-review-authorization-ci-boundary` skill. It does not introduce a
-second skill or make CI the review authority.
+This note records the unverified architecture input that caused the v3.0.0 major revision of the
+canonical `automation-review-authorization-ci-boundary` skill.
 
-## Observed path
+## Architecture reconciliation
 
-1. Issue #2375 received the loop-owned `state:plan-go` transition after the
-   implementation plan and plan review. The plan required fail-closed coverage
-   parsing, explicit nonzero failures, and actionable JSON output.
-2. The implementation produced one signed, conventional commit at head
-   `4e8b7ff97ea4c5aa73049bd4195e22c55fd092be`; the PR body contained exactly
-   one standalone `Closes #2375` line.
-3. PR #2655 exposed no GitHub review, issue-comment, or inline-comment objects
-   (`reviews=0`, PR comments `=0`, issue comments `=0`). That empty surface is
-   an observability fact, not a missing authorization.
-4. The loop recorded `state:implementation-go` at `2026-08-06T03:56:30Z`.
-   Treat that exclusive, loop-owned label as the durable review authorization
-   for the exact reviewed head; do not substitute review prose or CI results.
-5. Required checks completed afterward, including `unit-tests` at
-   `03:57:42Z` and `required-checks-gate` at `03:57:46Z`. `pr-policy`, lint,
-   integration, build, security, and schema checks were successful as well.
-6. `merge_wait` merged the reviewed head at `03:58:11Z` as squash merge commit
-   `cee2b5ca61fd58bb914f88f330e8c5bc88367f15`; `autoMergeRequest` was null.
+ProjectHephaestus previously treated the exclusive `state:implementation-go` label plus a
+process-local reviewed-head proof as sufficient loop-owned authorization. The current design adds a
+separate human authorization requirement before the queue-owned merge mutation.
 
-## Reusable learning
+The issue's original native auto-merge path is obsolete. ADR-0014 replaced auto-merge arming with a
+SHA-conditional REST merge, and the codebase retains an architecture regression proving
+`PipelineGitHub` has no `arm_auto_merge`. The authorization gate therefore belongs immediately
+around every live `merge_pr_if_head()` call. Native auto-merge remains prohibited.
 
-For a direct implementation happy path, audit the ordered facts separately:
-plan-go → exact implementation head → empty review surfaces (if applicable) →
-loop-owned implementation-go → required-check completion → conditional merge.
-The review label authorizes the loop's source-review decision; required checks
-establish the repository merge contract; `merge_wait` owns the final
-SHA-conditional squash merge and must not arm or mutate native auto-merge.
+## Proposed artifact
 
-## Verification
+One native GitHub `APPROVED` review whose body is exactly:
 
-`verified-ci`: PR #2655 merged in ProjectHephaestus after the required checks
-and merge event were observed live.
+```text
+<!-- hephaestus-merge-authorization:v1 -->
+```
+
+GitHub repository/PR nesting binds scope, and `commit.oid` binds the review to the exact head. The
+author must be a human with current write-or-higher permission and must differ from the authenticated
+automation actor. Edited trusted markers, duplicate review IDs in one snapshot, pagination loops,
+truncation, malformed data, snapshot drift, and unavailable permission/viewer facts fail closed.
+
+## Restart and race semantics
+
+Repeated observation of the same review for the same repository, PR, and head is durable recovery,
+not replay. Restart preserves the GitHub review but loses the process-local automated review proof,
+so fresh automated review is still required. A changed head makes the old authorization stale.
+
+GitHub can condition the merge on the head SHA but not atomically on review identity or current review
+state. An initial and final authorization read minimize the dismissal race. A dismissal observed on
+the final read blocks; one racing after that read cannot cancel the in-flight request. The artifact is
+therefore an issuance for an immutable head, not a continuously revocable lease.
+
+## Rollout status
+
+Unverified. Existing GO-labelled PRs without the marker should block without label, merge, or
+auto-merge mutation. If validation is defective, stop queue-driven merging and use the repository's
+normal branch-protected manual process; do not restore label-only automatic merging.
+
+The prior notes about label-only authority are historical evidence and are preserved in the v2.8.0
+snapshot in the skill history rather than remaining active guidance here.
