@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization, (10) generated PR prose says tests were not run while live required checks must be audited separately, or (11) Path.glob() can hide a discovery OSError and --allow-empty could turn an unreadable workflow inventory into a false success."
+description: "Separate automation-loop source-review authorization from repository policy, required-check readiness, and the final exact-head merge. Use when: (1) review approval must bind to an exact head, (2) CI duplicates a ruleset-owned signature policy, (3) an advisory workflow is mistaken for merge authority, (4) merge-wait must preserve reviewed-head proof while checks finish, (5) native auto-merge is already armed, (6) repeated NOGO or skipped rounds need fail-closed handling, (7) detached-review publication and handoff evidence must remain head-bound, (8) batched thread replies need replay-safe head and snapshot identity, (9) review and merge GitHub I/O must move to workers without weakening ordering or authorization, (10) generated PR prose says tests were not run while live required checks must be audited separately, (11) Path.glob() can hide a discovery OSError and --allow-empty could turn an unreadable workflow inventory into a false success, or (12) a dormant textual verdict parser survives after structural and label-driven review authority replaces it."
 category: architecture
-date: 2026-08-06
-version: "2.7.0"
+date: 2026-08-07
+version: "2.8.0"
 user-invocable: false
 verification: verified-ci
 history: automation-review-authorization-ci-boundary.history
@@ -44,6 +44,8 @@ tags:
   - glob-error-suppression
   - empty-inventory
   - issue-2382
+  - prose-parser-removal
+  - compatibility-surface
 ---
 
 # Automation Review Authorization: CI Boundary
@@ -52,10 +54,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-06 |
+| **Date** | 2026-08-07 |
 | **Objective** | Keep a code-automation loop's strict source-review decision inside that loop rather than delegating its authorization to CI/CD, and enforce exact-head review/merge progression across repeated remediation rounds. |
-| **Outcome** | ProjectHephaestus PR #2604 / issue #2330 removed duplicate signature verification from `pr-policy` and deleted the non-authorizing `auto-merge-policy` job. The live loop kept source-review authority in the exact-head GO label, left signature and required-check enforcement with GitHub, and conditionally merged the reviewed head without native auto-merge. PR #2663 / issue #2381 confirmed the same boundary when generated PR prose said testing was not run: live required checks still independently established merge readiness, while the loop-owned GO label and exact-head merge remained authoritative. PR #2664 / issue #2382 added the workflow-discovery fail-closed case: a review caught `Path.glob()` suppressing unreadable-directory errors, the implementation switched to `Path.iterdir()` with regression coverage, and the corrected exact head completed the normal GO-label, required-check, and conditional-merge path. PR #2675 / issue #2396 added the runtime-boundary case: the initial review kept `max_delay=0` NOGO until a same-head reply fixed the retry sleep cap and added a retry regression, after which the exact-head GO label, delayed required checks, and conditional merge completed normally. |
-| **Verification** | verified-ci — final review head `76ab9692`; three review threads resolved; required checks green; exclusive GO/NOGO transition completed; merge commit `b9a27e62` landed at `2026-08-04T22:15:59Z`. |
+| **Outcome** | ProjectHephaestus PR #2512 removed the unused textual `Verdict: GO/NOGO` compatibility parser, its infrastructure-error sentinel and alias re-export, and parser-only tests. Structural implementation-review parsing and live label/head gates remained authoritative, while the canonical `ReviewVerdict` type stayed available to the active plan-review stage through a direct import. Later PRs confirmed the same boundary across exact-head review, required-check readiness, and conditional merge behavior. |
+| **Verification** | verified-ci — ProjectHephaestus PR #2512 passed unit, integration, lint, policy, security, build, and required-check gates before merge commit `3d70076b` landed at `2026-07-30T03:20:20Z`. |
 | **Issue #2361 / PR #2612** | verified-ci — five remediation batches journaled 31 replies against exact heads and thread-snapshot digests. A later same-head review revoked an interim GO. The final review matched `db9bd1ef`; all 37 threads were resolved, GO replaced NOGO, required checks completed, and conditional merge `d9d53fa0` followed with native auto-merge null. |
 | **Issue #2633 / PR #2636** | verified-ci — reply delivery, PR-review reconciliation, and merge-wait admission moved behind closed typed worker jobs. Six replies used one head-and-snapshot-bound batch; final review matched `79974e42`, all threads resolved, GO replaced NOGO, required checks passed, and conditional merge `d993cc1b` followed. |
 | **Issue #2370 / PR #2651** | verified-ci — the first inline review bound to head `063c16ec` kept the PR at NOGO for three major behavior-contract gaps. Replies addressed prose-pinned follow-up assertions, restored plan/implementation-loop R0/R2 routing coverage, and fenced hostile TASK/TASK_REVIEW/DIFF/UNADDRESSED inputs. The final review bound to `cefd9d4f`; GO replaced NOGO, required checks passed independently, and conditional merge `3953a52` followed with native auto-merge null. |
@@ -63,6 +65,7 @@ tags:
 | **Issue #2381 / PR #2663** | verified-ci — the generated PR body said testing was not run by the automation pipeline, but live `unit-tests` and `required-checks-gate` passed on final head `a1a3f26b`. No GitHub review or issue-comment object existed; the durable audit was GO at `07:29:56Z`, required checks at `07:33:48Z`, and conditional merge commit `e8a6f40f` at `07:34:52Z` with native auto-merge null. |
 | **Issue #2382 / PR #2664** | verified-ci — the first review found that `Path.glob()` suppressed directory `OSError`s, allowing `--allow-empty` to misclassify an unreadable inventory as clean. The implementation reply added `Path.iterdir()` discovery and a regression on the same head; the final review matched `0f0b74ee`, GO was labeled at `08:13:33Z`, NOGO was removed at `08:13:35Z`, the required-checks gate completed at `08:18:04Z`, and conditional merge commit `f5979f98` followed at `08:18:27Z`. |
 | **Issue #2396 / PR #2675** | verified-ci — the initial exact-head review kept head `846f73a7` NOGO because accepting `max_delay=0` still allowed a retry to sleep `0.1s`; a same-head reply moved capping after the floor and added a retry regression. GO was labeled at `14:47:27Z`, NOGO was removed at `14:47:29Z`, the required-checks gate passed at `14:57:21Z`, and conditional merge `41241fb3` followed at `14:57:46Z` with native auto-merge null. |
+| **PR #2512** | verified-ci — merge commit `3d70076b` removed `parse_review_verdict`, `_VERDICT_RE`, `_SUMMARY_PAIR_RE`, `INFRA_ERROR_REVIEW_TEXT`, the `claude_invoke` alias re-export, and parser-only unit/property tests. All required checks passed before merge. |
 
 ## When to Use
 
@@ -91,6 +94,7 @@ tags:
 - A remediation round replies to several review threads and its durable handoff must not replay against a changed head or changed thread set.
 - Review reconciliation or merge admission causes stage-step stalls, and moving the GitHub I/O to workers must preserve exact-head proof, receipt ordering, retry identity, and merge-attempt semantics.
 - Workflow validation uses `--allow-empty`, and a discovery API may suppress filesystem errors; verify that unreadable directories remain tool failures rather than becoming an allowed empty inventory.
+- Structural implementation-review parsing and label/head gates are already authoritative, but a legacy textual `Verdict: GO/NOGO` parser, sentinel, alias re-export, or parser-only tests still imply a second compatibility authority surface.
 
 ## Verified Workflow
 
@@ -154,6 +158,12 @@ workflow discovery must preserve tool-error evidence:
   - do not use `Path.glob()` when unreadable directories must fail closed; Python 3.13 can suppress its `OSError`
   - enumerate with `Path.iterdir()` and filter `.yml`/`.yaml` so directory failures remain observable
   - `--allow-empty` may suppress only a confirmed empty inventory, never discovery, read, decode, size, or parse errors
+
+retire dormant prose authority surfaces:
+  1. prove the textual verdict parser and sentinel have no production callers
+  2. remove parser regexes, sentinels, compatibility re-exports, and parser-only tests together
+  3. keep canonical structured types at their owning module and import them directly where active
+  4. verify structural audit parsing and live label/head gates remain unchanged
 ```
 
 ### Detailed Steps
@@ -255,6 +265,16 @@ workflow discovery must preserve tool-error evidence:
     regression. A valid constructor input is not enough if the runtime behavior violates its
     documented bound.
 
+25. Remove dormant prose compatibility surfaces once structural review authority is established.
+    First prove repository-wide that the textual verdict parser and any infrastructure-error
+    sentinel have no production callers. Delete the parser, its regexes, sentinel, compatibility
+    re-export, and parser-only unit/property tests as one bounded change. Preserve canonical
+    structured types that still serve another stage, and make active stages import those types
+    from their owner rather than through the retired helper module. Verify absence with an exact
+    symbol search, then run the structured plan-review, implementation-review audit, label/head
+    gate, and remaining-helper tests. PR #2512 followed this pattern: it removed the unused
+    `parse_review_verdict` surface while retaining `ReviewVerdict` for plan review.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -287,6 +307,7 @@ workflow discovery must preserve tool-error evidence:
 | Treat returned subprocess failures as the whole tool-failure surface | PR #2657 initially converted Ruff's returned nonzero/invalid-output cases but left `TimeoutExpired` and process-launch `OSError` outside `RuffComplexityError`. | Those failures could bypass both the human false-return contract and the JSON error envelope with a traceback. | Normalize subprocess exceptions at the runner boundary, add regression coverage for both CLI modes, and require a fresh exact-head review before GO. |
 | Treat `Path.glob()` as an error-propagating workflow discovery API | PR #2664 / issue #2382 used `Path.glob()` to enumerate workflow files and tested `--allow-empty` around a monkeypatched `glob()` failure. | Python 3.13 suppresses the directory `OSError`, so an unreadable directory became an empty inventory and `--allow-empty` could return success. | Use `Path.iterdir()` (or another error-propagating API), classify unreadable discovery as a tool error, and regression-test the real directory failure path. |
 | Accept `max_delay=0` without exercising a retrying call | PR #2675 / issue #2396 added construction/minimum coverage but did not trigger the backoff path. | The retry implementation still applied a `0.1s` floor after the cap, so the documented zero ceiling was violated despite valid construction. | Test the retrying runtime path for boundary values; construction success alone does not prove the behavioral contract. |
+| Keep a no-caller textual verdict parser for compatibility | `parse_review_verdict`, its `Verdict: ERROR` sentinel, regexes, alias re-export, and parser-only tests remained after implementation review became structural and label-driven. | The dormant surface suggested that prose could still authorize routing, duplicated the canonical type boundary, and preserved tests for behavior no production path consumed. | Remove the parser family and its parser-only tests together; retain structured types only at their active owning module and verify the real label/head gates. |
 
 ## Results & Parameters
 
@@ -295,6 +316,8 @@ workflow discovery must preserve tool-error evidence:
 | Decision marker | `state:implementation-go` is the sole loop-owned authorization after a current review GO. |
 | Prohibited source-review dependencies | CI checks, workflow runs, artifacts, deployments, external status contexts, and review-proof leases cannot grant GO. |
 | Review-state handoff | After the label's current-head readback, retain the exact reviewed head only as a process-local merge receipt; discard verdict prose, grades, artifacts, leases, and aliases. |
+| Compatibility cleanup | Remove unused textual verdict parsers, companion sentinels/regexes, alias re-exports, and parser-only tests; do not replace them with another prose parser or shim. |
+| Structured type boundary | Keep `ReviewVerdict` in its canonical module when plan review still consumes it, and import it directly there; implementation review continues through structural audit parsing plus live label/head gates. |
 | Direct-PR correction | Use the PR number as strict-review work-item context rather than `None`. |
 | Defense in depth | `merge_wait.on_enter` rejects `issue=None` before consuming labels or making any GitHub mutation. |
 | Merge admission | Open `main` PR + explicit `autoMergeRequest:null` + exclusive GO + zero unresolved threads + server conversation protection + exact process-local reviewed head. |
@@ -324,6 +347,7 @@ workflow discovery must preserve tool-error evidence:
 | PR #2663 / issue #2381 audit | Generated PR prose reported no automation-pipeline testing, but live `unit-tests` and `required-checks-gate` passed on final head `a1a3f26b`. GitHub exposed no review or issue-comment object; GO was labeled at `07:29:56Z`, checks completed at `07:33:48Z`, and merge commit `e8a6f40f` followed at `07:34:52Z` with native auto-merge null. |
 | PR #2664 / issue #2382 audit | The first exact-head review identified the suppressed-directory-error gap in `Path.glob()`; the implementation reply stayed tied to the PR head and added `Path.iterdir()` plus regression coverage. The final review matched `0f0b74eecd94339b269d0e5e95b7b83921d2d3f6`; GO replaced NOGO, `required-checks-gate` completed at `08:18:04Z`, and `merge_wait` conditionally merged `f5979f98eddb3ec311b5d7f5a7c3acb9f791a845` at `08:18:27Z`. |
 | PR #2675 / issue #2396 audit | The initial review found that `max_delay=0` still slept `0.1s` on a retrying call and kept the exact head NOGO. The same-head reply moved the cap after the floor and added a retry regression; final head `846f73a7559bd74704ab921a4f3a8836683f60be` reached GO at `14:47:27Z`, NOGO removal at `14:47:29Z`, required-check completion at `14:57:21Z`, and conditional merge `41241fb37c6451c8a2422e1b24c4a31797c36b64` at `14:57:46Z`, with native auto-merge null. |
+| PR #2512 parser-removal audit | Merge commit `3d70076b9a654c3c41255c835a3ac97aecf23a21` removed 224 lines of retired review lifecycle surface from the relevant files; the unit, integration, lint, policy, and required-check gates passed. |
 
 ## Verified On
 
@@ -344,3 +368,4 @@ workflow discovery must preserve tool-error evidence:
 | ProjectHephaestus | Issue #2381 / PR #2663 | Verified-ci compact inline-review path. The generated PR body said testing was not run, but live required checks passed independently. No GitHub review/comment object existed; final head `a1a3f26b0de9343a187fe5c336af16d0883bc3fa` reached durable GO, required-check completion, and conditional merge `e8a6f40f72713c45a33a30098bc97d31708fc33d` with native auto-merge null. |
 | ProjectHephaestus | Issue #2382 / PR #2664 | Verified-ci workflow-discovery review path. The initial review found that `Path.glob()` hid unreadable-directory failures, so `--allow-empty` could incorrectly pass. A same-head implementation reply documented the `Path.iterdir()` fix and regression; the loop then applied `state:implementation-go`, removed `state:implementation-no-go`, waited for required checks, and conditionally merged the exact reviewed head. |
 | ProjectHephaestus | Issue #2396 / PR #2675 | Verified-ci runtime-boundary review path. The first exact-head review kept the PR NOGO for the `max_delay=0` retry-floor defect; a same-head reply added behavioral regression coverage, then GO replaced NOGO, the required-checks gate completed, and merge-wait conditionally merged the reviewed head with native auto-merge unset. |
+| ProjectHephaestus | PR #2512 | Verified-ci compatibility-removal path. The unused textual implementation-review verdict parser, infrastructure-error sentinel, regexes, alias re-export, and parser-only tests were deleted while structural review parsing, live label/head gates, and the plan-review-owned `ReviewVerdict` type remained. |
