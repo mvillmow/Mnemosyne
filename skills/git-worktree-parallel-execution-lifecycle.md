@@ -51,16 +51,20 @@ description: "Use when: (1) creating isolated git worktrees for parallel agent e
   explicit user 'discard' approval, (25) multiple independently discovered issues or PRs resolve
   to the SAME writable head branch — admit exactly one writer at the serialized worktree-allocation
   boundary, let only the requesting issue's expected path reuse the checkout, and classify every
-  later issue as permanently superseded without retries, writer agents, preservation, or reruns."
+  later issue as permanently superseded without retries, writer agents, preservation, or reruns,
+  (26) programmatic stale-worktree cleanup parses `git worktree list --porcelain` with whitespace
+  tokenization or newline-only record boundaries — request `--porcelain -z`, parse NUL-delimited
+  attributes as records, and keep each complete path paired with its branch and lock state."
 category: tooling
-date: 2026-07-26
-version: "1.6.0"
+date: 2026-08-06
+version: "1.7.0"
 verification: unverified
 user-invocable: false
 history: git-worktree-parallel-execution-lifecycle.history
 tags: [worktree, git, parallel-agents, wave-execution, cleanup, branch-collision, contamination,
   locked-worktree, staged-files, rebase-merge, myrmidon, safety-net, lifecycle, submodule,
-  squash-merge, hand-to-user, first-writer-wins, branch-ownership, superseded]
+  squash-merge, hand-to-user, first-writer-wins, branch-ownership, superseded, porcelain,
+  nul-delimited, path-safety]
 ---
 # Git Worktree Parallel Execution Lifecycle
 
@@ -71,13 +75,14 @@ tags: [worktree, git, parallel-agents, wave-execution, cleanup, branch-collision
 | **Date** | 2026-05-19 |
 | **Objective** | Complete lifecycle of git worktrees for parallel agent execution: creation, switching, syncing, parallel dispatch, contamination recovery, and constraint-aware cleanup |
 | **Outcome** | Canonical consolidation of 4 skills: worktree-parallel-agent-execution (v1.5.0), worktree-cleanup-user-constraints (v1.6.0), git-worktree-management-patterns (v2.8.0), worktree-lifecycle-create-switch-sync (v1.0.0) |
-| **Verification** | unverified overall after the v1.6.0 branch-ownership amendment; prior phases retain their recorded verified-local/verified-ci evidence, while Phase 9 is a reviewed design pending implementation and CI |
+| **Verification** | unverified overall after the v1.7.0 delimiter-safe parsing amendment; prior phases retain their recorded verified-local/verified-ci evidence, while Phase 9 and the new Phase 6 parser subsection are reviewed designs pending implementation and CI |
 | **History** | [changelog](./git-worktree-parallel-execution-lifecycle.history) |
 
 Covers the full git worktree lifecycle for parallel agent work: creation, navigation, syncing
 with upstream, parallel wave execution patterns, branch collision avoidance, contamination
 detection and recovery, constraint-aware cleanup, and myrmidon swarm parallelization for
-mass cleanup. Includes the critical "no-worktree-at-all" anti-pattern warning.
+mass cleanup. Includes the critical "no-worktree-at-all" anti-pattern warning and a
+delimiter-safe machine-parsing contract for worktree paths.
 
 ## When to Use
 
@@ -113,6 +118,8 @@ mass cleanup. Includes the critical "no-worktree-at-all" anti-pattern warning.
   (squash-merge caveat: trust the PR `MERGED` state, not `--merged`/commits-ahead)
 - A dirty worktree whose uncommitted changes are junk (an abandoned partial revert of merged work)
   — inspect + ASK the user rather than auto-commit/auto-discard
+- A cleanup tool parses `git worktree list --porcelain`, especially when worktree paths may contain
+  spaces or newlines and must remain paired with their branch and `locked` attributes
 
 **Cross-process subprocess contention:**
 
@@ -167,18 +174,12 @@ cd <repo-root>
 git worktree remove .worktrees/issue-<N>
 git worktree prune
 
-# Inventory all worktrees with state
-git worktree list --porcelain | awk '/^worktree /{print $2}' | tail -n +2 | while read wt; do
-  br=$(git -C "$wt" branch --show-current 2>/dev/null || echo "(detached)")
-  dirty=$(git -C "$wt" status --short 2>/dev/null | wc -l)
-  cherry=$(git cherry origin/main "$br" 2>/dev/null | grep -c '^+' || echo "?")
-  pr=$(gh pr list --head "$br" --state all --json state,number \
-    --jq '.[0] | "\(.state) #\(.number)"' 2>/dev/null || echo "NO_PR")
-  echo "$wt | branch=$br | dirty=$dirty | cherry=$cherry | pr=$pr"
-done | tee /tmp/wt-inventory.txt
+# Machine-readable inventory: consume stdout with the stateful NUL parser in Phase 6.
+# Do not pipe paths through awk '{print $2}' or `for path in $(...)`.
+git worktree list --porcelain -z
 
-# Locked worktree cleanup (clean PIDs only)
-git worktree list --porcelain | awk '/^worktree /{wt=$2} /^locked/{print wt " LOCKED"}'
+# Locked worktree cleanup (clean PIDs only): inspect the `locked` attribute in the
+# same parsed record that supplied the complete path.
 git -C <locked-path> status --short   # empty = safe
 git worktree unlock <path> && git worktree remove <path>
 
@@ -388,25 +389,90 @@ FILE="$WORKTREE_ROOT/tests/shared/training/test_file.mojo"
 
 ### Phase 6: Constraint-Aware Worktree Cleanup
 
+#### Delimiter-Safe Porcelain Parsing (proposed, ProjectHephaestus 2026-08-06)
+
+> **Warning:** This amendment is `unverified`. The implementation and regression tests were
+> planned and reviewed, but had not been executed locally or in CI when captured.
+
+[Git documents `--porcelain` as the stable scripting format](https://git-scm.com/docs/git-worktree#Documentation/git-worktree.txt---porcelain)
+and recommends combining it with `-z`; with `-z`, every attribute line is NUL-terminated, so even
+a path containing a newline is unambiguous. The first attribute is always `worktree`, and an empty
+field ends the record.
+
+Request and preserve that representation end-to-end. Parse labeled attributes with a small
+record-state machine; never recover a path with `.split()`, `awk '{print $2}'`, or
+`for path in $(...)`:
+
+```python
+from pathlib import Path
+
+
+def worktree_porcelain() -> str:
+    """Return the repository's NUL-delimited worktree inventory."""
+    return run_git(["worktree", "list", "--porcelain", "-z"]).stdout
+
+
+def parse_worktree_porcelain(output: str, root: Path) -> list[tuple[Path, str]]:
+    """Return attached, non-primary worktrees and their exact branch names."""
+    worktrees: list[tuple[Path, str]] = []
+    path: Path | None = None
+    branch: str | None = None
+    for field in [*output.split("\0"), ""]:
+        if field.startswith("worktree "):
+            path = Path(field.removeprefix("worktree "))
+            branch = None
+        elif field.startswith("branch refs/heads/"):
+            branch = field.removeprefix("branch refs/heads/")
+        elif not field:
+            if path is not None and branch is not None and path != root:
+                worktrees.append((path, branch))
+            path = None
+            branch = None
+    return worktrees
+
+
+def worktree_is_locked(path: Path, porcelain: str) -> bool:
+    """Return whether *path* is locked in the supplied inventory."""
+    in_record = False
+    for field in [*porcelain.split("\0"), ""]:
+        if field.startswith("worktree "):
+            in_record = Path(field.removeprefix("worktree ")) == path
+        elif not field:
+            in_record = False
+        elif in_record and field.startswith("locked"):
+            return True
+    return False
+```
+
+This changes only the transport/parser boundary. Keep cleanup policy stable: exclude the primary,
+detached, and bare worktrees; preserve attached branch names; classify staleness by the existing
+closed-issue or merged-branch rules; and continue skipping dirty or locked worktrees.
+
+Pin both the low-level protocol and the behavioral boundary in tests:
+
+1. Assert the Git argv is exactly `worktree list --porcelain -z`.
+2. Build representative NUL-delimited records for primary, ordinary attached, detached, bare,
+   and locked worktrees.
+3. Assert a path such as `/repo/.worktrees/123 finished` remains paired with `123-finished`.
+4. Pass that fixture through the dry-run cleanup entry point; assert dirtiness receives the
+   complete `Path`, logging includes the complete path and branch, and removal is not called.
+5. Retain ordinary-path tests for candidate filtering, branch pairing, and closed-issue stale
+   detection. A delimiter migration is incomplete if only the parser unit test changes.
+
 #### All-Clean Shortcut
 
 When `git status --short` is empty for every worktree (0 dirty files), execute removal
 directly — no script needed. The generate-first constraint exists only to prevent accidental
 loss of real work.
 
-```bash
-git worktree list --porcelain | awk '/^worktree /{print $2}' | tail -n +2 | while read wt; do
-  dirty=$(git -C "$wt" status --short 2>/dev/null | wc -l)
-  echo "$wt | dirty=$dirty"
-done
-# ALL dirty=0 → direct execution is safe
-```
+Use `parse_worktree_porcelain(worktree_porcelain(), root)` above, then run the dirty check with an
+argv list such as `run_git(["status", "--porcelain"], cwd=path)`. Do not serialize the parsed path
+back through shell whitespace splitting. If every candidate is clean, direct removal remains safe.
 
 #### Locked Worktrees from Dead Agent PIDs
 
-```bash
-# Identify locked worktrees
-git worktree list --porcelain | awk '/^worktree /{wt=$2} /^locked/{print wt " LOCKED"}'
+```text
+# Identify locked worktrees with worktree_is_locked(path, porcelain) above.
 # Check cleanliness
 git -C <locked-path> status --short   # empty = clean
 # Locked + clean: unlock and remove directly (no --force)
@@ -565,18 +631,10 @@ git worktree remove --force <worktree-path> && git worktree prune && git branch 
 **Three-method worktree classification that drove the keep/prune decision** (run all three per
 worktree; a worktree is `CLEAN_PRUNE_OK` only when PR is MERGED AND status is clean):
 
-```bash
-for wt in $(git worktree list --porcelain | awk '/^worktree /{print $2}' | tail -n +2); do
-  br=$(git -C "$wt" branch --show-current)
-  # (1) PR state — MERGED / OPEN / none
-  pr=$(gh pr list --head "$br" --state all --json number,state --jq '.[0] | "\(.state) #\(.number)"' 2>/dev/null || echo "NO_PR")
-  # (2) commits ahead of main (squash-merge caveat below)
-  ahead=$(git -C "$wt" rev-list --count origin/main..HEAD 2>/dev/null)
-  # (3) dirty check
-  dirty=$(git -C "$wt" status --porcelain | wc -l)
-  echo "$wt | br=$br | pr=$pr | ahead=$ahead | dirty=$dirty"
-done
-```
+Iterate the `(path, branch)` pairs returned by the NUL parser above. For each pair, run the same
+three checks with argv-based subprocess calls: PR state via `gh pr list --head <branch> --state all`,
+commits ahead via `git -C <path> rev-list --count origin/main..HEAD`, and dirtiness via
+`git -C <path> status --porcelain`. The classification table below is unchanged.
 
 | PR state | ahead | dirty | Classification |
 | -------- | ----- | ----- | -------------- |
@@ -909,8 +967,26 @@ gh api --method DELETE "repos/$REPO/git/refs/heads/<branch-name>"
 | Route all worktree failures through Git retry | Converted branch-already-owned into a generic subprocess/worktree failure | A deterministic second-writer conflict consumed retry budgets and could end as `agent_error_exhausted`, even though retrying cannot grant ownership | Give only the typed ownership exception a stable classification and permanent successful supersession; unrelated errors still fail closed |
 | Key deduplication by issue or PR number | Grouped items only when they shared an issue mapping or one consolidated PR | Distinct PRs may still report the same writable `head_branch`, so PR-keyed grouping misses the dangerous collision | Key writer ownership on the verified live branch at allocation time; test both consolidated-PR and distinct-PR/same-head cases |
 | Preserve or rerun the superseded item | Treated the second logical item as a failed implementation with a checkout to retain | It never owned a writer worktree and no agent ran, so preservation/rerun guidance creates duplicate or misleading operator work | Clear the worktree and finish pass; structural terminal collectors then list only the branch owner |
+| Tokenize `git worktree list --porcelain` with `awk '{print $2}'`, `.split()`, or `for path in $(...)` | Treated paths as whitespace-delimited tokens | A worktree such as `/repo/.worktrees/123 finished` is truncated and can be checked, logged, or removed under the wrong path; newline-containing paths are ambiguous without `-z` | Request `--porcelain -z`, parse labeled NUL-delimited fields, and keep path/branch/lock attributes in one record |
+| Change only the parser to NUL fields | Updated `.splitlines()` to `.split("\0")` but left the Git invocation, fixtures, lock lookup, or cleanup-boundary test unchanged | Producer and consumers no longer share one format contract, or the unit test passes without proving the real cleanup path receives the complete path | Migrate producer, all consumers, fixtures, lock detection, and an end-to-end dry-run regression together; retain ordinary-path policy assertions |
 
 ## Results & Parameters
+
+### Delimiter-Safe Worktree Inventory (Proposed)
+
+| Parameter / invariant | Required value |
+| --------------------- | -------------- |
+| Git argv | `worktree list --porcelain -z` |
+| Field delimiter | NUL (`"\0"`) |
+| Record start | `worktree <complete-path>` |
+| Record end | Empty NUL-delimited field |
+| Attached branch | `branch refs/heads/<name>` in the same record |
+| Lock state | `locked` or `locked <reason>` in the same record |
+| Candidate exclusions | Primary root, detached, and bare worktrees |
+| Stale policy | Existing closed-issue OR merged-branch rule |
+| Safety policy | Skip dirty and locked worktrees; dry-run never removes |
+| Regression path | `/repo/.worktrees/123 finished` paired with `123-finished` |
+| Verification | `unverified` — implementation and CI pending |
 
 ### Shared-Branch Writer Admission Invariants (Proposed)
 
@@ -978,12 +1054,14 @@ WORKTREE_DIR="/tmp/mnemosyne-$(date +%s)-<name>"
 
 **Programmatic path extraction from porcelain output:**
 
-```bash
-# WRONG — extracts the git ref, not the filesystem path
-WORKTREE_PATH=$(git worktree list --porcelain | grep "branch.*/$BRANCH$" | awk '{print $2}')
-# CORRECT — tracks preceding worktree line
-WORKTREE_PATH=$(git worktree list --porcelain 2>/dev/null | \
-  awk -v branch="$BRANCH" '/^worktree /{path=$2} /^branch / && $2 ~ "/" branch "$" {print path}')
+```text
+# WRONG — loses whitespace/newline safety and can extract the ref instead of the path:
+git worktree list --porcelain | grep ... | awk '{print $2}'
+
+# CORRECT — capture once and use the stateful NUL parser from Phase 6:
+porcelain = run_git(["worktree", "list", "--porcelain", "-z"]).stdout
+for path, branch in parse_worktree_porcelain(porcelain, root):
+    ...
 ```
 
 **Rebase conflict resolution:**
@@ -1015,3 +1093,4 @@ WORKTREE_PATH=$(git worktree list --porcelain 2>/dev/null | \
 | ProjectHephaestus | Cross-PROCESS worktree-creation race in the issue-major automation loop (issues 1553/1547): two `hephaestus-ci-driver` subprocesses ran `_sweep_orphaned_arming_records` simultaneously → `create_worktree(issue-1547)` collision (`fatal: ... already exists`); fixed with new reusable `hephaestus/utils/file_lock.py` (`fcntl.flock`) wrapping the sweep, extracted from two pre-existing inline flock copies. PR #1568 / issue #1567. Verified-local: 2017 unit tests pass, mypy clean (411 files), ruff clean, TDD RED→GREEN for both `file_lock` and the sweep regression; PR CI still PENDING (unit-test matrix) at capture time | cross-process-orphan-sweep-race 2026-06-21 |
 | HomericIntelligence Odysseus | Cleaning ~7 agent worktrees in the Odysseus meta-repo (~14 submodules incl. `research/ProjectOdyssey`) after a long parallel session. 3-method classification (PR state / commits-ahead / dirty) pruned 2 merged-PR worktrees cleanly by the agent; submodule-containing + dirty ones hit `fatal: working trees containing submodules cannot be moved or removed` (even after `git submodule deinit`), and `--force`/`reset --hard`/`branch -D`/`rm -rf` were Safety-Net-blocked → handed exact commands to the user, who completed them. Squash-merge caveat (merged branches show ahead>0, absent from `--merged`) and a preserve-first abandoned-revert case (`odyssey-5551-wt`, junk revert of merged PR #5582) surfaced. Read-only classification + hand-to-user (procedure, not a CI-tested artifact) | worktree-cleanup-submodule 2026-07-13 |
 | ProjectHephaestus | Reviewed design for branch-keyed first-writer-wins admission when multiple issues, whether through one consolidated PR or distinct PRs, adopt the same writable head branch. Proposed typed ownership classification, file-locked holder-check/add, successful supersession, and owner-only preservation/rerun assertions. Unverified: implementation and CI pending. | shared-writer-branch ownership plan 2026-07-26 |
+| ProjectHephaestus | Reviewed stale-worktree cleanup plan: move the current Python owner to `git worktree list --porcelain -z`, parse NUL-delimited path/branch/lock records, add a space-containing dry-run regression, and preserve existing stale/safety policy. Unverified: implementation and CI pending. | delimiter-safe stale-worktree cleanup plan 2026-08-06 |
