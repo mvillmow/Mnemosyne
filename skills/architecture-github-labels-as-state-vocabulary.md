@@ -3,7 +3,7 @@ name: architecture-github-labels-as-state-vocabulary
 description: "Use mutually-exclusive `state:*` GitHub labels as the single source of truth for pipeline state, with deterministic disjoint mutations and exclusive fail-closed reads. Use when: (1) automation gates work on fragile free-text verdicts, (2) multiple components must read one durable GitHub state signal identically, (3) state swaps must remain one canonical `gh issue edit`, (4) duplicate, shuffled, or contradictory labels must not change decisions, (5) post-mutation confirmation and retries must fail closed without compensating writes."
 category: architecture
 date: 2026-08-06
-version: "1.3.0"
+version: "1.3.1"
 user-invocable: false
 verification: verified-local
 history: architecture-github-labels-as-state-vocabulary.history
@@ -177,12 +177,12 @@ done
    - **Do NOT "fix" this by making VERIFY scan the plan-comment marker directly** — that reintroduces two-signals-for-one-gate divergence (Failed Attempt #2). The fix is to execute the missing transition, not to add a second reader.
 
 10. **Canonicalize mutations and fail closed on every state read** *(v1.3.0, proposed and unverified)*:
-   - Put one pure normalization authority beside the label vocabulary. Convert additions and removals to sorted, de-duplicated lists and reject their intersection **before** logging, label provisioning, dry-run handling, or GitHub I/O. This makes permutations observationally identical and prevents a label from being both added and removed in one command.
-   - Route generic add, remove, and combined-edit helpers plus repo-scoped transport builders through that authority. A state swap still emits exactly one `gh issue edit`; normalization changes only determinism and validation.
-   - Parse GitHub label payloads into sets. Readers for a mutually-exclusive family must compare the active family labels to exact singleton sets. GO+NO-GO, multiple plan states, malformed payloads, transport errors, and JSON errors all fail closed rather than selecting the first label or treating membership as approval.
-   - Keep ownership explicit: generic label helpers canonicalize and mutate but do not infer a state family. The state-transition owner performs the atomic swap and then a **fresh exclusive readback**. A repo-scoped adapter confirms through its repo-scoped reader; an ambient adapter delegates the entire operation to the ambient transition owner and does not confirm twice.
-   - Provisioning is an idempotent prerequisite, not part of a rollback protocol. If provisioning succeeds but mutation or readback fails, propagate the exception and issue no compensating add/remove writes. Retry the identical canonical atomic swap and readback; this reconciles absent, successful-but-unconfirmed, and contradictory outcomes.
-   - Test at three seams: pure normalization/exclusivity, command construction and dry-run diagnostics, and transition-owner mutation/readback/retry. Include duplicate and reversed inputs, pre-I/O overlap rejection, one-edit assertions, contradictory label sets, malformed reads, mutation exceptions, and failed-readback retry.
+    - Put one pure normalization authority beside the label vocabulary. Convert additions and removals to sorted, de-duplicated lists and reject their intersection **before** logging, label provisioning, dry-run handling, or GitHub I/O. This makes permutations observationally identical and prevents a label from being both added and removed in one command.
+    - Route generic add, remove, and combined-edit helpers plus repo-scoped transport builders through that authority. A state swap still emits exactly one `gh issue edit`; normalization changes only determinism and validation.
+    - Parse GitHub label payloads into sets. Readers for a mutually-exclusive family must compare the active family labels to exact singleton sets. GO+NO-GO, multiple plan states, malformed payloads, transport errors, and JSON errors all fail closed rather than selecting the first label or treating membership as approval.
+    - Keep ownership explicit: generic label helpers canonicalize and mutate but do not infer a state family. The state-transition owner performs the atomic swap and then a **fresh exclusive readback**. A repo-scoped adapter confirms through its repo-scoped reader; an ambient adapter delegates the entire operation to the ambient transition owner and does not confirm twice.
+    - Provisioning is an idempotent prerequisite, not part of a rollback protocol. If provisioning succeeds but mutation or readback fails, propagate the exception and issue no compensating add/remove writes. Retry the identical canonical atomic swap and readback; this reconciles absent, successful-but-unconfirmed, and contradictory outcomes.
+    - Test at three seams: pure normalization/exclusivity, command construction and dry-run diagnostics, and transition-owner mutation/readback/retry. Include duplicate and reversed inputs, pre-I/O overlap rejection, one-edit assertions, contradictory label sets, malformed reads, mutation exceptions, and failed-readback retry.
 
 ## Failed Attempts
 
