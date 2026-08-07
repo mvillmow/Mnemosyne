@@ -3,7 +3,7 @@ name: gha-security-scanning-supply-chain
 description: "Use when: (1) adding CodeQL SAST to TypeScript/JavaScript workflows or Semgrep/Gitleaks to any PR pipeline, (2) CI security scans only trigger on push to main — not PRs — and need promotion to PR gates, (3) Gitleaks SARIF parsing uses grep instead of jq causing always-fail required checks, (4) enforcing pinned SHA-based action versions instead of mutable tags, (5) auditing or porting curl|bash installers with SHA-256 verification, (6) a GHA job fails at 'Set up job' due to unresolved transitive action dependency, (7) adding Bandit SAST as a required CI check for Python/pixi projects, (8) triaging and remediating CodeQL PR alerts when gh reports a check-run id instead of a workflow run id, (9) planning a SARIF -> GitHub Code Scanning (Security tab) upload via upload-sarif (gitleaks/trivy/codeql) and need a planning-stage verification checklist, (10) maintaining an allowlisted Bandit LOW-severity baseline that must fail closed on regressions, reductions, malformed JSON, or unreviewed updates, (11) extending zizmor coverage from workflows to tracked composite Actions without losing command parity, pinning, or least-privilege audits."
 category: ci-cd
 date: 2026-08-07
-version: "1.6.0"
+version: "1.6.1"
 user-invocable: false
 history: gha-security-scanning-supply-chain.history
 verification: verified-local
@@ -423,7 +423,7 @@ uses: prefix-dev/setup-pixi@a0af7a228712d6121d37aba47adf55c1332c9c2e  # v0.9.4
 Use `sed -i` (not the Edit tool) for workflow edits — pre-commit security hooks block interactive
 edits of `.github/workflows/*.yml`.
 
-## Proposed Workflow: Extend zizmor to tracked composite Actions
+### Proposed Workflow: Extend zizmor to tracked composite Actions
 
 > **Warning:** This workflow has not been validated end-to-end. Treat it as a hypothesis until the
 > configuration tests, real two-root scan, local hook, and CI all pass.
