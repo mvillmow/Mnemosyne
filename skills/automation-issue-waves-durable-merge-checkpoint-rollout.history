@@ -1,12 +1,31 @@
+# automation-issue-waves-durable-merge-checkpoint-rollout — History
+
+## v1.1.0 (2026-08-06)
+
+**Changed by:** ProjectHephaestus issue #2453 / PR #2687 implementation review and merge
+**Verification:** verified-ci
+
+### What changed
+- Upgraded the skill from an unverified design to the implemented, CI-validated workflow.
+- Added the two implementation-review failure modes: partial-wave resume after an earlier recorded merge, and lease-backed direct recovery silently dropping skip/plan-blocked entries.
+- Added the exact-head review, state-label, required-check, and conditional-merge audit for PR #2687.
+
+### Why
+The planning version described the required checkpoint authority but had no evidence that the live
+coordinator, recovery, review, and merge path satisfied it. PR #2687's review found that a changed
+main SHA after the first merge incorrectly blocked resumption, and that direct recovery could omit
+terminal external overrides from the checkpoint. The merged corrections added ancestry/fresh-fact
+resume validation and checkpointed terminal failures for those overrides.
+
+### Previous version (v1.0.0) snapshot
 ---
 name: automation-issue-waves-durable-merge-checkpoint-rollout
-description: "Design and verify durable repository-scoped issue waves that admit exact selections in 1, 2, 4, 8, then all phases. Use when: (1) an automation rollout must advance only after the prior exact issues merged normally, (2) restarts must replay immutable identifiers without rediscovery, (3) external or ambiguous merges must not authorize the next wave, (4) completed rollouts must become permanently audit-only, (5) implementation review must cover partial-wave resume and direct-recovery terminalization, or (6) the rollout's exact-head review-to-merge evidence needs auditing."
+description: "Design durable repository-scoped issue waves that admit exact selections in 1, 2, 4, 8, then all phases. Use when: (1) an automation rollout must advance only after the prior exact issues merged normally, (2) restarts must replay immutable identifiers without rediscovery, (3) external or ambiguous merges must not authorize the next wave, (4) completed rollouts must become permanently audit-only."
 category: architecture
 date: 2026-08-06
-version: "1.1.0"
+version: "1.0.0"
 user-invocable: false
-verification: verified-ci
-history: automation-issue-waves-durable-merge-checkpoint-rollout.history
+verification: unverified
 tags:
   - automation-loop
   - issue-waves
@@ -30,8 +49,8 @@ tags:
 |-------|-------|
 | **Date** | 2026-08-06 |
 | **Objective** | Stage eligible repository issues through durable `1 -> 2 -> 4 -> 8 -> all` waves, admitting a later wave only after the previous wave's exact issues and automation-owned normal merges are verified on synchronized `main`. |
-| **Outcome** | Implemented and merged in ProjectHephaestus PR #2687 / issue #2453. Implementation review caught partial-wave resume blocked by a changed `main` SHA and lease-backed direct recovery silently dropping `state:skip` / `state:plan-blocked` entries; the final patch added receipt-backed ancestry resume, fresh merge-fact checks, checkpointed terminal failures, and regression coverage. |
-| **Verification** | `verified-ci` — the final reviewed head passed the repository CI and required-checks gate, then merged through the loop's exact-head conditional path. A live 1/2/4/8/all rollout was not part of this capture. |
+| **Outcome** | An architecture-ready state machine, authority model, recovery contract, security boundary, and adversarial test matrix were produced. No implementation, local test run, live rollout, or CI validation occurred in this session. |
+| **Verification** | `unverified` — reviewed design only; implementation and end-to-end evidence are pending. |
 
 ## When to Use
 
@@ -51,11 +70,16 @@ tags:
 - In-memory queues and per-issue best-effort records are insufficient because admission authority
   must survive restarts and coordinate across processes.
 
+## Proposed Workflow
+
+> **Warning:** This workflow has not been validated end-to-end. Treat it as a hypothesis until
+> focused tests, the full repository suite, and a live rollout confirm it.
+
+<!-- The repository validator currently requires the heading below even for unverified skills. -->
 ## Verified Workflow
 
-The checkpoint design below was implemented for issue #2453. CI validated the implementation and
-the live PR audit below validated the review-to-merge ordering; a full staged rollout remains
-operational follow-up.
+> **Warning:** The steps below are proposed, not verified. The checkpoint design and integration
+> map were reviewed, but no code or tests were executed in this session.
 
 ### Quick Reference
 
@@ -87,28 +111,6 @@ Recommended operator sequence:
 <automation-loop> --repos <REPO> --issue-limit 8
 <automation-loop> --repos <REPO>  # final all-eligible wave, then later audits
 ```
-
-### PR #2687 / issue #2453 review-and-merge audit
-
-The implementation review found two concrete recovery bugs and kept the PR in the no-go state:
-
-1. After one issue in a multi-issue wave merged, `main` advanced beyond the sealed base while
-   another selected issue remained unfinished. Resume must allow that expected advancement only
-   when recorded merge receipts, fresh GitHub facts, and ancestry checks prove it; an unconditional
-   `current_main == sealed_base` check blocks valid crash recovery.
-2. Lease-backed direct recovery could drop a selected issue whose fresh classification became
-   `state:skip` or `state:plan-blocked` before it reached the finished sink. Reconcile those
-   overrides into checkpointed terminal failures so the later wave sees the exact failure rather
-   than a misleading generic incompleteness.
-
-The corrected head `19e513196102756eccae5a804f343855e63f2ebd` received the final head-bound
-`COMMENTED` review record at `03:13:32Z`; the inline implementation replies documented both
-regressions and their tests. GitHub recorded `state:implementation-go` at `03:15:56Z`, removed
-`state:implementation-no-go` at `03:15:59Z`, completed `unit-tests` at `03:24:24Z` and
-`required-checks-gate` at `03:25:12Z`, then merged commit
-`3388466e00db9b60364bcad5119bb628bcce2640` at `03:26:07Z`. The final PR state reported
-`autoMergeRequest: null`; review prose and CI remained evidence/context, while the loop-owned GO
-label and exact-head conditional merge formed the authorization path.
 
 ### 1. Give one component exclusive checkpoint ownership
 
@@ -382,30 +384,8 @@ Required test groups:
 | Recycle completed checkpoints | Interpreted a bounded selector after completion as a new rollout | Historical authority and auditability were silently destroyed | Completed is permanent and audit-only; require a separately designed explicit reset workflow |
 | Let dry-run mutate local state | Sealed a checkpoint because no GitHub mutation was planned | The preview changed what a later real run was allowed to execute | Dry-run may diagnose and display selections, but must not seal, advance, record, or complete |
 | Add a config field in the middle of a dataclass | Inserted an optional rollout field before an established positional dependency | Existing positional callers silently rebound to the new field | Append optional public fields after existing positional contracts and test the legacy binding |
-| Resume only when `current_main_sha == sealed_base_sha` | A two-issue wave merged its first issue, then a restart rejected the unchanged selector because `main` had advanced as expected | Resume after a partial successful wave must accept recorded receipt progress only with fresh merge facts and ancestry validation |
-| Drop a lease-backed direct recovery after classification became `state:skip` or `state:plan-blocked` | The direct source discarded the selected entry before the finished sink, leaving no checkpoint terminal outcome | Reconcile selected external overrides into durable terminal failures; never silently omit a sealed identifier |
 
 ## Results & Parameters
-
-### Verified implementation and merge parameters
-
-```text
-issue: 2453
-pull_request: 2687
-final_reviewed_head: 19e513196102756eccae5a804f343855e63f2ebd
-implementation_go: 2026-08-07T03:15:56Z
-implementation_no_go_removed: 2026-08-07T03:15:59Z
-required_checks_gate: 2026-08-07T03:25:12Z
-merge_commit: 3388466e00db9b60364bcad5119bb628bcce2640
-merged_at: 2026-08-07T03:26:07Z
-native_auto_merge: null
-```
-
-The review-to-merge contract is: final review and implementation replies bind to the current
-head; the exclusive loop-owned GO label is written only after fresh live-state guards; required
-checks complete as repository merge context; `merge_wait` conditionally merges that exact head;
-and a rerun treats the merged PR as terminal rather than trying to infer authority from
-`autoMergeRequest`.
 
 ### Fixed phase sequence
 
@@ -443,18 +423,23 @@ labels/review prose = workflow signals/audit evidence, never merge-receipt subst
 | Completed | bounded | Actionable rejection |
 | Active | any unexpected selector | Fail before mutation |
 
-### Confidence gates for future rollout validation
+### Confidence gates before upgrading verification
 
 1. Focused checkpoint, CLI, pipeline, Git-worker, merge-receipt, and terminal-ordering tests pass.
 2. Lint, formatting, and static typing pass for the changed automation surface.
 3. Architecture, import-boundary, ADR, and atomic-write guards pass.
 4. The complete unit suite passes.
-5. CI passes on the implementation PR (satisfied by PR #2687).
-6. A real repository rollout completes 1/2/4/8/all and later unbounded runs remain audit-only;
-   this remains pending for issue #2453.
+5. CI passes on the implementation PR.
+6. A real repository rollout completes 1/2/4/8/all and later unbounded runs remain audit-only.
 
 ## Verified On
 
 | Project | Context | Details |
 |---------|---------|---------|
-| ProjectHephaestus | Issue #2453 / PR #2687 implementation review and merge | Final head `19e51319`; review corrections covered partial-wave resume and direct-recovery terminalization; CI and required checks passed before conditional merge `3388466e`. [Project-specific integration notes](./automation-issue-waves-durable-merge-checkpoint-rollout.notes.md) |
+| ProjectHephaestus | Reviewed implementation plan for repository-scoped issue-wave checkpoints; no code executed | [Project-specific integration notes](./automation-issue-waves-durable-merge-checkpoint-rollout.notes.md) |
+
+---
+
+## v1.0.0 (2026-08-06)
+
+**Initial version.**
