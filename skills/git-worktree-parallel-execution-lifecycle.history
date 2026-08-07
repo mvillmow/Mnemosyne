@@ -1,6 +1,53 @@
 <!-- markdownlint-disable MD024 -->
 # git-worktree-parallel-execution-lifecycle — History
 
+## v1.7.0 (2026-08-06)
+
+**Changed by:** ProjectHephaestus delimiter-safe stale-worktree cleanup plan for
+`hephaestus/github/tidy.py`
+**Verification:** unverified
+
+### What changed
+
+- Added trigger 26 and a matching cleanup search surface for programmatic worktree inventories
+  that must preserve complete paths, branch association, and lock state.
+- Added a proposed Phase 6 delimiter-safe parser contract: request
+  `git worktree list --porcelain -z`, parse labeled NUL-delimited fields with record state, and
+  share the captured inventory between candidate discovery and lock detection.
+- Required policy preservation across the transport change: continue excluding the primary,
+  detached, and bare worktrees; retain closed-issue/merged-branch stale detection; and keep the
+  dirty, locked, and dry-run safety gates unchanged.
+- Replaced whitespace-unsafe `awk '{print $2}'` and `for path in $(...)` recommendations with the
+  NUL-safe parser contract.
+- Added regression guidance that pins the exact Git argv, representative NUL fixtures, complete
+  path/branch pairing for `/repo/.worktrees/123 finished`, and a dry-run cleanup-boundary test
+  while retaining ordinary-path behavior assertions.
+- Added two Failed Attempts covering whitespace tokenization and partial delimiter migrations.
+- Added proposed results/parameters and a ProjectHephaestus "Verified On" row explicitly marked
+  unverified.
+- Bumped version 1.6.0 → 1.7.0 and updated the date and searchable tags; aggregate verification
+  remains `unverified` because implementation, local tests, and CI are pending.
+
+### Why
+
+Machine consumers must not infer Git worktree paths from whitespace tokens. A path containing a
+space is truncated by `awk '{print $2}'`, and newline-delimited porcelain cannot represent a path
+containing a newline without quoting ambiguity. Git documents `--porcelain` as the stable scripting
+format and recommends `-z`, which NUL-terminates each attribute. Parsing the `worktree`, `branch`,
+and `locked` attributes as one record keeps identity intact while leaving the cleanup decision and
+safety policy unchanged. Testing only the parser is insufficient: the regression must cross the
+dry-run cleanup boundary to prove the complete path reaches dirtiness checks and operator logs.
+
+### Previous version (v1.6.0) snapshot
+
+The exact previous skill is the immutable base blob at commit `1089dc002eb339d8a020d2ce01314fba4a598477`:
+
+```bash
+git show 1089dc002eb339d8a020d2ce01314fba4a598477:skills/git-worktree-parallel-execution-lifecycle.md
+```
+
+---
+
 ## v1.6.0 (2026-07-26)
 
 **Changed by:** ProjectHephaestus shared-writer-branch ownership design for multiple issues that
