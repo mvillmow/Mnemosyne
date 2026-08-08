@@ -1,6 +1,6 @@
 ---
 name: pr-review-loop-orchestration-agent-patterns
-description: "Use when: (1) building or debugging a Python implement-review loop where an LLM sub-agent reviews a PR and a fixer agent addresses inline comments, (2) a review loop resolves threads even though no commit was produced — resolution must be gated on a real commit not the model self-report, (3) a loop ends AMBIGUOUS or NO-GO too fast before ever earning an explicit GO verdict, (4) LLM or agent-generated inline PR review comments are rejected by GitHub (HTTP 422) because they do not lie on a changed diff hunk, (5) an agent-driven CI-fix session produces no commit and the PR stays red; the correct response is a single bounded retry with unresolved review threads injected verbatim, (6) a review fix plan file concludes no changes are needed and the automation should self-cancel without opening a new PR, (7) a feature-dev:code-reviewer sub-agent cannot execute shell commands and cannot post gh pr review — wrong agent type was chosen, (8) a GitHub GraphQL PR-review mutation field selection is wrong and the automation loop fails on every call with Field X does not exist, (9) pre-commit must cover the full PR diff from the merge-base not just the most-recent-edit files before pushing, (10) an existing-PR review handler short-circuits NO-GO PRs as if they were settled (idempotency `if has_go or has_no_go: skip`) so a failed-review PR never re-enters the loop — short-circuit on GO ONLY, (11) an existing-PR worktree sync fails `git fetch origin {issue}-auto-impl` with exit 128 because the PR head branch was ASSUMED from the issue number instead of read from the PR's real `headRefName`, (12) an in-loop LLM PR reviewer posts a FALSE policy violation (e.g. `POLICY VIOLATION: Closes, auto-merge-premature, signed-commits` on a PR that actually has `Closes #N`, auto-merge OFF, and a signed commit) because its policy fetch failed open to violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate (`pr-policy` required, `auto-merge-policy` advisory) already enforces, (13) an in-loop implementer review cycle (`_run_impl_review_loop`) converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO instead of re-reviewing up to `MAX_REVIEW_ITERATIONS` and auto-skipping only on TRUE exhaustion, (14) the address-review coordinator is handed a review thread the reviewer itself labels non-blocking / pre-existing / out-of-scope / follow-up-worthy, or that asks for an edit the approved plan explicitly scoped out (e.g. behind a 'count must not increase' verification guard) — the correct disposition is to leave the thread UNADDRESSED (out of the `addressed` set) as a follow-up issue and make NO code change, because resolving a comment means giving it a disposition, not necessarily editing code, (15) a run parks EVERY pr_review item to state:skip via 'zero-thread NOGO retry cap exhausted' or 'exhausted at round N (automation unresolved 0 -> 0)' and you suspect the reviewer model or verdict parsing — check each PR's hephaestus-pr-review-zero-thread-nogo anomaly comment FIRST: a summary like 'NOGO: ... head unchanged (Nth round)' means by-design stale-PR triage (#2079: deterministic no-progress NOGOs escalate to skip instead of burning implement budget), NOT a reviewer failure; only a FRESHLY-implemented PR parked this way indicates a real defect, (16) a review audit must collect every review-thread and nested comment page before deciding that no blocking evidence exists, (17) a queue merge must rebind the reviewed head before a normal conditional merge"
+description: "Use when: (1) building or debugging a Python implement-review loop where an LLM sub-agent reviews a PR and a fixer agent addresses inline comments, (2) a review loop resolves threads even though no commit was produced — resolution must be gated on a real commit not the model self-report, (3) a loop ends AMBIGUOUS or NO-GO too fast before ever earning an explicit GO verdict, (4) LLM or agent-generated inline PR review comments are rejected by GitHub (HTTP 422) because they do not lie on a changed diff hunk, (5) an agent-driven CI-fix session produces no commit and the PR stays red; the correct response is a single bounded retry with unresolved review threads injected verbatim, (6) a review fix plan file concludes no changes are needed and the automation should self-cancel without opening a new PR, (7) a feature-dev:code-reviewer sub-agent cannot execute shell commands and cannot post gh pr review — wrong agent type was chosen, (8) a GitHub GraphQL PR-review mutation field selection is wrong and the automation loop fails on every call with Field X does not exist, (9) pre-commit must cover the full PR diff from the merge-base not just the most-recent-edit files before pushing, (10) an existing-PR review handler short-circuits NO-GO PRs as if they were settled (idempotency `if has_go or has_no_go: skip`) so a failed-review PR never re-enters the loop — short-circuit on GO ONLY, (11) an existing-PR worktree sync fails `git fetch origin {issue}-auto-impl` with exit 128 because the PR head branch was ASSUMED from the issue number instead of read from the PR's real `headRefName`, (12) an in-loop LLM PR reviewer posts a FALSE policy violation (e.g. `POLICY VIOLATION: Closes, auto-merge-premature, signed-commits` on a PR that actually has `Closes #N`, auto-merge OFF, and a signed commit) because its policy fetch failed open to violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate (`pr-policy` required, `auto-merge-policy` advisory) already enforces, (13) an in-loop implementer review cycle (`_run_impl_review_loop`) converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO instead of re-reviewing up to `MAX_REVIEW_ITERATIONS` and auto-skipping only on TRUE exhaustion, (14) the address-review coordinator is handed a review thread the reviewer itself labels non-blocking / pre-existing / out-of-scope / follow-up-worthy, or that asks for an edit the approved plan explicitly scoped out (e.g. behind a 'count must not increase' verification guard) — the correct disposition is to leave the thread UNADDRESSED (out of the `addressed` set) as a follow-up issue and make NO code change, because resolving a comment means giving it a disposition, not necessarily editing code, (15) a run parks EVERY pr_review item to state:skip via 'zero-thread NOGO retry cap exhausted' or 'exhausted at round N (automation unresolved 0 -> 0)' and you suspect the reviewer model or verdict parsing — check each PR's hephaestus-pr-review-zero-thread-nogo anomaly comment FIRST: a summary like 'NOGO: ... head unchanged (Nth round)' means by-design stale-PR triage (#2079: deterministic no-progress NOGOs escalate to skip instead of burning implement budget), NOT a reviewer failure; only a FRESHLY-implemented PR parked this way indicates a real defect, (16) a review audit must collect every review-thread and nested comment page before deciding that no blocking evidence exists, (17) a queue merge must rebind the reviewed head before a normal conditional merge, (18) review must inspect the original branch-point snapshot before any post-review rebase, (19) behind/conflicting post-review heads must re-enter through a host-owned bounded rebase path, and (20) duplicate plan publishers must be ejected as benign terminal outcomes rather than poisoning a completed run"
 category: ci-cd
 date: 2026-08-06
 version: "1.9.0"
@@ -62,6 +62,12 @@ tags:
   - nested-review-comments
   - review-evidence-completeness
   - reviewed-head-rebind
+  - original-branch-point-snapshot
+  - deferred-post-review-rebase
+  - restored-writer-checkout
+  - rebase-conflict-budget
+  - remote-head-drift
+  - duplicate-plan-ownership
   - homericintelligence
 ---
 
@@ -71,11 +77,11 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-06 |
+| **Date** | 2026-08-08 |
 | **Objective** | Build and debug a Python implement-review loop that drives LLM sub-agents to review a PR and fix its inline comments, converging on an EVIDENCE-BASED `Verdict: GO`. Covers commit-gated thread resolution, complete pagination of review-thread and nested comment connections, head-bound review handoffs, and the queue's normal conditional merge path. |
-| **Outcome** | Merged across multiple ProjectHephaestus PRs, including issue #2390 / PR #2671, which verified complete review-evidence pagination followed by the loop-owned GO label, independent required checks, and a normal merge of the reviewed head with native auto-merge absent. |
+| **Outcome** | Merged across multiple ProjectHephaestus PRs, including issue #2390 / PR #2671 and issue #2711 / PR #2712. PR #2712 verified branch-point review snapshots, benign duplicate-plan ejection, and host-owned post-review rebase/conflict recovery before the normal reviewed-head merge path. |
 | **Verification** | verified-ci |
-| **Version** | 1.9.0 |
+| **Version** | 1.10.0 |
 
 ## When to Use
 
@@ -287,6 +293,46 @@ core "converge ONLY on `Verdict: GO`; a re-open OVERRIDES a stale GO" rule:
    fired for them; the GO-ONLY fix EXPOSED it. Test note: any test exercising this path MUST
    mock `get_pr_head_branch` or it makes a real `gh` call (a test took 103s before mocking).
 
+#### Branch-point review snapshots and post-review rebase recovery: issue #2711 / PR #2712
+
+Keep review evidence and branch maintenance as separate phases. Review the PR from the original
+branch-point snapshot, then rebase only after review has identified the required changes. A
+pre-review rebase changes the code under review and obscures whether a finding belongs to the
+submitted head.
+
+Use this handoff contract when the reviewed PR is behind or conflicts with the target branch:
+
+1. Preserve and reuse the writer checkout restored by `pr_review`; do not allocate a second
+   worktree for the same already-attached branch.
+2. Re-sync that checkout to the live remote PR head and prove `HEAD == expected_remote_sha` before
+   rebasing. If the remote advanced, do not force-with-lease over the external commit; return the
+   item for a fresh review instead.
+3. Route host-detected conflicts through an independent bounded `rebase_conflict` budget checked
+   before the ordinary implementation budget. Earlier implementation or remediation turns must
+   not silently exhaust conflict recovery.
+4. Keep Git history mutation host-owned. The agent may edit conflict files only; the host validates
+   the index, changed-path scope, ancestry, signatures, DCO, remote drift, and exact lease
+   publication, then continues/signs/pushes the rebase and requires a fresh review.
+5. Treat duplicate plan ownership as a benign terminal ejection with an explicit summary and a
+   passing outcome. A `SKIP` disposition is not benign if the coordinator treats any non-pass
+   terminal item as a failed run.
+
+The safe event order is:
+
+```text
+original branch-point snapshot -> read-only review -> GO/NO-GO evidence
+-> live-head rebind -> restored-writer rebase/conflict recovery when needed
+-> host validation + exact lease publication -> fresh review -> merge_wait
+-> required checks + normal reviewed-head conditional merge
+```
+
+PR #2712's review found all four failure classes above: duplicate-plan ejection was initially
+reported as a failing terminal result; post-review re-entry requested a second worktree; conflict
+resolution shared the ordinary implementation budget; and a restored checkout could overwrite an
+external push unless it first synchronized and proved the expected remote SHA. The corrected path
+resolved the findings, kept Git continuation and publication in host code, and returned remote
+drift to fresh review.
+
 #### Policy enforcement belongs in CI gates, not the in-loop LLM reviewer
 
 Do NOT make the in-loop LLM PR reviewer enforce repo PR policy (`Closes #N` body
@@ -395,6 +441,18 @@ After the complete snapshot is collected, the queue must:
 PR #2671 / issue #2390 completed this path: head `5e16b5b6…` merged as
 `ebde4269…`, required checks were green, `state:implementation-go` was present, and
 `autoMergeRequest` was null.
+
+#### Completed review-to-merge audit: issue #2711 / PR #2712
+
+Audit this class of run in order: the review must be tied to the original branch-point snapshot;
+each required finding must have a head-bound implementation reply; the live head must be rebound
+before post-review rebase; remote drift must trigger fresh review rather than a force-with-lease
+overwrite; then the exclusive loop-owned GO label and independent required checks authorize the
+normal conditional merge. PR #2712's four inline required findings were resolved on the final
+head `c942cf78a0f0fcf98bf2542b33203402772acedd`; the PR carried `state:implementation-go`, all
+required checks passed (including `pr-policy`, `required-checks-gate`, unit/integration, lint,
+security, and build), and it merged normally as `6dbd7e35d40f56e11a87b8362d5438a0296b032c` with
+native auto-merge absent.
 
 #### Inline-comment diff-hunk 422 validation
 
@@ -569,6 +627,12 @@ recurring traps:
 | `if git branch --list "$branch"; then` (bash review trap) | Used the exit code of `git branch --list` to test branch existence | `git branch --list` always exits 0; the exit code reflects execution, not a match | Test the OUTPUT: `[[ -n "$(git branch --list "$branch")" ]]`. |
 | Post every comprehensive-review finding through the inline review API | Mapped each finding into the `POST .../reviews` inline-comments payload | Inline comments must validate against a changed diff hunk (422 on any off-hunk line) — complex and error-prone for prose findings | Prefer a simple line-specific PR comment (`gh pr comment` / `comments/{id}/replies`); reserve the inline review API for true on-hunk annotations. Post comprehensively in THREE places: PR review body + line-specific PR comment + `gh issue comment` on the tracking issue. |
 | Reply to one review comment via the GraphQL thread-reply mutation | Resolved the thread node id then called `addPullRequestReviewThreadReply` for a one-line reply | Overkill — needed the thread node id and the full GraphQL round-trip for a trivial reply | For a single one-line reply use the REST endpoint `gh api repos/OWNER/REPO/pulls/PR/comments/COMMENT_ID/replies --method POST -f body="..."`; reserve the GraphQL mutation for when you need the returned `comment { id }`. |
+| Rebase before reviewing the submitted PR head | Rebasing the branch first made the review snapshot include unrelated base changes and obscured which head the findings described | PR #2712 required review from the original branch point, with rebasing deferred until after review | Keep review immutable; treat rebase as a separate post-review recovery phase followed by fresh review |
+| Allocate a second worktree for post-review re-entry | The implementation stage requested another checkout for a branch whose writer checkout had been restored by review | Same-run ownership verification failed before the rebase could start | Reuse the restored writer checkout across `pr_review` → implementation rebase → `merge_wait` |
+| Spend the ordinary implementation budget on conflict recovery | Host-detected conflicts entered the regular budget after initial implementation/review turns had already consumed it | Conflict resolution returned immediately without invoking its agent | Check an independent bounded `rebase_conflict` budget before ordinary implementation attempts |
+| Let the conflict agent perform Git history mutation | The prompt asked the agent to rebase/continue; a successful provider exit could clear flags without proving ancestry, signatures, DCO, or exact lease publication | The agent could rewrite commits outside host signing and lease controls, or a no-op could look complete | Let the agent edit files only; host validates, continues, signs, and publishes the exact lease, then demands fresh review |
+| Rebase a restored checkout without syncing the remote head | Rebased reviewed H and force-with-lease-published against externally advanced E | External commits could be replaced even though the lease command succeeded | Sync and prove `HEAD == expected_remote_sha`; on drift, return for fresh review without publishing |
+| Eject duplicate plan ownership as `SKIP` | Duplicate plan publishers were ejected, but the coordinator recorded the ejection as a non-passing terminal item | The completed run exited 1 even though the duplicate had been safely removed | Use an explicit benign ejection summary with a passing terminal outcome (PR #2712) |
 | Call color/echo helpers in the arg-parsing block (bash) | Invoked pretty-print helpers from the top-of-script flag parser | The parser runs before the helper definitions, so the call no-ops or errors | Emit early diagnostics with `echo "..." >&2`; only use the helpers after their definitions. |
 | Value-taking flag without an absent-value guard (bash) | `--branch X` read `$1` blindly as its value | A missing value silently swallows the next flag as the argument | Guard with `[[ -z "$1" \|\| "$1" == --* ]]` before consuming the value, else error out. |
 | Mutate an array inside a piped `while read` loop (bash) | Appended to an array inside `cmd \| while read` | The piped loop runs in a subshell; array mutations are lost after the pipe | Use process substitution: `while read ...; do arr+=(...); done < <(cmd)`. |
@@ -595,6 +659,17 @@ recurring traps:
 | Existing-PR short-circuit is GO-ONLY | `_review_existing_pr`: `if has_go: return` (NOT `has_go or has_no_go`) | a NO-GO label is NOT terminal; it must re-enter the loop (PR #1104) |
 | Existing-PR worktree uses the PR's real head branch | `get_pr_head_branch(pr)` → `headRefName`; fall back to `{issue}-auto-impl` only on `None` | the PR may have matched via `Closes #N`, so the head branch can differ from the issue number (PR #1106) |
 | Out-of-scope / non-blocking thread → resolve by NON-action | coordinator emits `{"addressed": []}`, dispatches ZERO sub-agents, commits nothing, leaves loop scratch file (`.claude-address-review-*.md`) UNTRACKED | "resolve" = give a disposition, not edit; editing a plan-scoped-out thread (e.g. behind a "count must not increase" guard) breaches the scope contract (verified-local, PR #1245 / #1216) |
+
+### Branch-point review and post-review rebase contract (verified-ci, PR #2712)
+
+| Rule | Implementation | Why |
+|------|----------------|-----|
+| Review the submitted head first | Detached review uses the original branch-point snapshot; no pre-review rebase | Keeps findings attributable to the PR head under review |
+| Reuse writer ownership | Post-review re-entry consumes the writer checkout restored by `pr_review` | Avoids same-branch second-worktree collisions |
+| Rebase only after live-head proof | Sync restored checkout and compare `HEAD` with the expected remote SHA; drift routes to fresh review | Prevents replacing external commits with a stale reviewed checkout |
+| Bound conflict recovery separately | Check independent `rebase_conflict` budget before ordinary implementation attempts | Earlier turns must not starve required conflict handling |
+| Host owns Git publication | Agent edits files; host validates index/scope/ancestry/signature/DCO/drift, continues, signs, and exact-lease-pushes | Preserves signing, lease, and reviewed-head safety boundaries |
+| Eject duplicate ownership benignly | Record an explicit ejection summary with a passing terminal result | A `SKIP` terminal can poison coordinator completion |
 
 ### `--nitpick` severity model and per-comment dispatch
 
@@ -731,3 +806,4 @@ mutation {
 | ProjectHephaestus | Issue #2338 / PR #2610 (2026-08-04) | verified-ci; initial NO-GO, force-pushed final head, second informational `COMMENTED` review, loop-owned GO-label handoff, independent required checks, and normal squash merge with no native auto-merge |
 | ProjectHephaestus | Issue #2617 / PR #2620 (2026-08-04) | verified-ci; major inline NO-GO on incomplete cache validation, head-bound implementation reply (`faf34a3b…`), exclusive GO-label transition, required checks green, and normal merge commit `747bb4e1…` with no native auto-merge |
 | ProjectHephaestus | Issue #2390 / PR #2671 (2026-08-06) | verified-ci; complete pagination of review-thread and nested comment connections, exclusive `state:implementation-go`, required checks green, reviewed head `5e16b5b6…`, and normal merge commit `ebde4269…` with `autoMergeRequest: null` |
+| ProjectHephaestus | Issue #2711 / PR #2712 (2026-08-08) | verified-ci; original branch-point review snapshot, four required review findings resolved on final head `c942cf78…`, restored-writer re-entry, independent conflict budget, host-owned signed/DCO/lease publication, remote-drift fresh-review guard, benign duplicate-plan ejection, required checks green, and normal merge commit `6dbd7e35…` with native auto-merge absent |
