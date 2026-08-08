@@ -3,7 +3,7 @@ name: automation-review-authorization-ci-boundary
 description: "Separate automated implementation eligibility, operator exact-head merge authorization, repository readiness, and the irreversible merge mutation. Use when: (1) an automation label is being treated as complete merge authority, (2) a queue-owned merge needs one durable operator approval, (3) GitHub review pagination or provenance must fail closed, (4) restart and head-change behavior must preserve distinct proofs, or (5) native auto-merge has been replaced by a SHA-conditional merge."
 category: architecture
 date: 2026-08-08
-version: "3.1.0"
+version: "3.2.0"
 user-invocable: false
 verification: unverified
 history: automation-review-authorization-ci-boundary.history
@@ -61,6 +61,9 @@ can prove.
   unavailable and must block the merge before any mutation.
 - A final read can minimize but cannot atomically eliminate the race between review dismissal and a
   REST merge request.
+- A completed ProjectHephaestus direct-implementation run may emit only non-authorizing `COMMENTED`
+  review records and no issue/comment object, so its review-to-merge path must be audited from the
+  exact head, loop-owned state label, live required checks, and terminal conditional merge event.
 
 ## Proposed Workflow
 
@@ -216,6 +219,7 @@ gh pr review <N> \
 | Treat the approval as a continuously revocable lease | The design implied dismissal could cancel a merge atomically at any instant | GitHub cannot condition a merge request on review ID/state, so dismissal can race after the final read | Document issuance-for-head semantics and the unavoidable post-read race |
 | Let adapter failures escape the worker | Pagination, viewer, permission, JSON, or GraphQL errors raised out of merge-wait | The queue recorded an unclassified worker failure and obscured whether a mutation was attempted | Catch and classify all authorization-read failures before the conditional PUT |
 | Pass raw review data to the merge adapter | Callers could invoke the irreversible method without a verified, head-bound proof | Validation was split across call sites and tests could not prove every mutation was guarded | Require and validate one immutable authorization capability at the adapter boundary |
+| Infer review authorization from GitHub review objects or generated PR prose | ProjectHephaestus PR #2654 had only non-authorizing `COMMENTED` review records and no issue/comment object, while its generated body said tests were not run, although the loop completed its direct-implementation review path | Those surfaces were incomplete or informational and could misclassify a successfully reviewed and merged PR | Audit the exact final head, loop-owned GO label transition, live required-check completion, and terminal merge event separately |
 
 ## Results & Parameters
 
@@ -241,6 +245,7 @@ gh pr review <N> \
 | Restart rule | Durable review may be reused for the same PR/head only after fresh process-local automated review proof |
 | Head-change rule | Old review becomes stale; a new exact-head human approval is required |
 | Native auto-merge | Queue never enables, disables, adopts, or polls it |
+| Direct implementation audit | For issue #2373 / PR #2654, final head `6689d076d04b824a7915b239083fdbf0f3f9f6a5` received only non-authorizing `COMMENTED` review records and no issue/comment object usable as authorization; `state:implementation-go` was recorded at `09:47:30Z`, NOGO was removed at `09:47:32Z`, `required-checks-gate` completed at `10:00:17Z`, and `merge_wait` conditionally merged commit `3ff588ca6419adf2da4618186e82d380ef2cc1ac` at `10:03:47Z` with native auto-merge null. This is an audit of the current queue path, not validation of the proposed operator-authorization design above. |
 
 ### Acceptance Tests
 
@@ -287,3 +292,4 @@ implementation and CI pass.
 | Project | Context | Details |
 |---------|---------|---------|
 | ProjectHephaestus | Exact-head operator authorization design | Unverified architecture proposal for gating the queue-owned SHA-conditional merge while retaining the native auto-merge prohibition. |
+| ProjectHephaestus | Issue #2373 / PR #2654 | verified-ci direct-implementation audit. The final head was `6689d076`; GitHub exposed only non-authorizing `COMMENTED` review records and no issue/comment object, the loop-owned GO label preceded the later required-check gate, and `merge_wait` conditionally merged `3ff588ca` with native auto-merge unset. The audit relied on head, labels, checks, and the merge event rather than PR prose. |
