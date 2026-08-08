@@ -1,9 +1,9 @@
 ---
 name: automation-review-authorization-ci-boundary
-description: "Separate automated implementation eligibility, human exact-head merge authorization, repository readiness, and the irreversible merge mutation. Use when: (1) an automation label is being treated as complete merge authority, (2) a queue-owned merge needs one durable human approval, (3) GitHub review pagination or provenance must fail closed, (4) restart and head-change behavior must preserve distinct proofs, or (5) native auto-merge has been replaced by a SHA-conditional merge."
+description: "Separate automated implementation eligibility, operator exact-head merge authorization, repository readiness, and the irreversible merge mutation. Use when: (1) an automation label is being treated as complete merge authority, (2) a queue-owned merge needs one durable operator approval, (3) GitHub review pagination or provenance must fail closed, (4) restart and head-change behavior must preserve distinct proofs, or (5) native auto-merge has been replaced by a SHA-conditional merge."
 category: architecture
-date: 2026-08-07
-version: "3.0.0"
+date: 2026-08-08
+version: "3.1.0"
 user-invocable: false
 verification: unverified
 history: automation-review-authorization-ci-boundary.history
@@ -32,16 +32,19 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-07 |
-| **Objective** | Require one durable, explicit, human-authored GitHub approval for the exact PR head before an automation queue performs its irreversible merge mutation. |
-| **Outcome** | Proposed a marked native `APPROVED` review, deterministic resolver, immutable authorization capability, stable bounded GitHub reads, and initial/final identity checks around readiness. Automated eligibility, operator authorization, repository readiness, and merge execution remain separate authorities. |
+| **Date** | 2026-08-08 |
+| **Objective** | Require one durable, explicit, operator-authored GitHub approval for the exact PR head before an automation queue performs its irreversible merge mutation. |
+| **Outcome** | Proposed a marked native `APPROVED` review, deterministic resolver, strict nullable-BigInt normalization, immutable authorization capability, stable bounded GitHub reads that preserve duplicate IDs for replay classification, and initial/final identity checks around readiness. Automated eligibility, operator authorization, repository readiness, and merge execution remain separate authorities. |
 | **Verification** | unverified — this is an architecture and implementation design. The resolver, adapters, stage behavior, restart cases, documentation, and CI have not been executed in this learning session. |
 | **History** | [changelog](./automation-review-authorization-ci-boundary.history) |
 
 The central correction is that a durable automation label and a process-local reviewed-head proof
-are necessary but not sufficient for a queue-owned merge. A distinct trusted human must authorize
-the exact immutable head through a native GitHub review. CI/CD remains readiness evidence and does
-not create either automated eligibility or operator authorization.
+are necessary but not sufficient for a queue-owned merge. A distinct trusted operator must
+authorize the exact immutable head through a native GitHub review. CI/CD remains readiness
+evidence and does not create either automated eligibility or operator authorization. GitHub's
+`User` type and repository permission can enforce useful provenance constraints, but
+"human-operated" remains a repository-administration assumption rather than a property the API
+can prove.
 
 ## When to Use
 
@@ -68,13 +71,13 @@ not create either automated eligibility or operator authorization.
 ### Quick Reference
 
 ```text
-automated source review ─────► state:implementation-go eligibility
-current process ─────────────► reviewed-head proof
-trusted human GitHub review ─► durable authorization for that exact head
-required checks/protection ──► repository readiness
-                                │
-                                ▼
-                     SHA-conditional squash merge
+automated source review ────────► state:implementation-go eligibility
+current process ────────────────► reviewed-head proof
+trusted operator GitHub review ─► durable authorization for that exact head
+required checks/protection ─────► repository readiness
+                                  │
+                                  ▼
+                       SHA-conditional squash merge
 ```
 
 ```text
@@ -82,9 +85,11 @@ required checks/protection ──► repository readiness
 ```
 
 The review must be native GitHub state `APPROVED`; its body must equal the marker exactly; its
-`commit.oid` must equal the reviewed head; it must be unedited; and its author must be a human with
-current `WRITE`, `MAINTAIN`, or `ADMIN` permission who is distinct from the authenticated automation
-actor.
+`commit.oid` must equal the reviewed head; and it must be unedited. Its actor must have
+`author.__typename == "User"`, `viewerDidAuthor == false`, a login distinct case-insensitively
+from the authenticated automation actor, no `[bot]` suffix, and current legacy repository
+permission `WRITE` or `ADMIN`. The legacy permission endpoint maps role `maintain` to
+`write`, so `MAINTAIN` is not a valid response value.
 
 ```bash
 gh pr view <N> --json state,headRefOid,baseRefName,autoMergeRequest
@@ -108,47 +113,64 @@ gh pr review <N> \
 
 3. **Use a native review as the creation record.** Select an exact marker body and require GitHub
    review state `APPROVED`. Bind repository and PR through repository-scoped traversal and PR
-   nesting; bind code through `commit.oid`. Retain the review node ID, database ID, author login,
-   exact head, submitted/updated timestamps, and SHA-256 body digest in an immutable capability.
-   Reject `includesCreatedEdit=true` or non-null `lastEditedAt` before capability construction.
+   nesting; bind code through `commit.oid`. Retain the required GraphQL node ID, normalized nullable
+   `fullDatabaseId`, author login and current permission, exact head, submitted/updated timestamps,
+   edit fields, and SHA-256 body digest in an immutable capability. Reject
+   `includesCreatedEdit=true` or non-null `lastEditedAt` before capability construction.
 
-4. **Resolve candidates with closed precedence.** Ignore unmarked reviews. A trusted malformed or
-   edited current-head marker is `REPLAYED`, even when a valid marker is also present. More than one
-   active trusted current-head approval is `AMBIGUOUS`. Exactly one is `AUTHORIZED`, regardless of
-   inert stale, dismissed, or untrusted candidates. With no active trusted current approval, prefer
-   `REVOKED` for current dismissed markers, then `STALE` for trusted old-head markers, then
-   `UNTRUSTED` for current untrusted markers, then `ABSENT` when no marker exists. Duplicate review
-   IDs in one snapshot are replayed input.
+4. **Resolve candidates with closed precedence.** First establish marker presence, actor provenance,
+   and commit binding. Data that prevents any of those facts from being established is unavailable
+   service evidence and raises; it is not a replay decision. Once a string-body marked review is
+   proven to be from a trusted actor on the current head, invalid or missing candidate metadata is
+   `REPLAYED`—including node ID, state, submitted/updated timestamp, `fullDatabaseId`, edit
+   indicator, or noncanonical marker body. `REPLAYED` takes precedence even when another valid
+   approval exists. Otherwise, more than one active trusted current-head approval is `AMBIGUOUS`;
+   exactly one is `AUTHORIZED`, regardless of inert stale, dismissed, or untrusted candidates.
+   With no active trusted current approval, prefer `REVOKED` for current dismissed markers, then
+   `STALE` for trusted old-head markers, then `UNTRUSTED` for current untrusted markers, then
+   `ABSENT` when no marked review exists. Duplicate review node IDs in one snapshot are
+   `REPLAYED` input.
 
-5. **Keep trust from becoming a veto.** Reject bot actors, the authenticated automation actor, and
-   actors without current `WRITE`, `MAINTAIN`, or `ADMIN` permission. An untrusted marker reports
-   `UNTRUSTED` only when no trusted authorization exists; an attacker cannot invalidate a valid
-   operator approval merely by adding another marked review.
+5. **Keep trust from becoming a veto.** Reject non-`User` actors, `viewerDidAuthor=true`, the
+   authenticated automation actor by case-insensitive login, `[bot]` logins, and actors without
+   current `WRITE` or `ADMIN` permission. An untrusted marker reports `UNTRUSTED` only when no
+   trusted authorization exists; an attacker cannot invalidate a valid operator approval merely by
+   adding another marked review. Document that these checks cannot prove a `User` account is not
+   machine-operated; administrators must restrict trusted access and keep the automation identity
+   distinct.
 
 6. **Treat reread identity differently from replay.** Re-observing the same review ID for the same
    repository, PR, and head after restart or before a bounded retry is durable recovery. The same
    review on an old head is stale. A duplicated ID within one snapshot or edit metadata on a trusted
    artifact is replay/tampering.
 
-7. **Read one complete, stable GitHub snapshot.** Traverse all review pages with a fixed maximum,
-   unique cursors, unique review IDs, validated page shapes, and explicit truncation rejection.
-   Select `id`, `databaseId`, `body`, `state`, `submittedAt`, `updatedAt`,
+7. **Read one complete, stable GitHub snapshot.** Traverse at most 100 pages and 10,000 reviews with
+   unique nonempty cursors, validated connection/page envelopes, repository/PR/head identity,
+   `totalCount` agreement, and explicit truncation rejection. Preserve duplicate review IDs and
+   stable malformed candidate fields so the resolver—not the transport adapter—can classify replay.
+   Select `id`, `fullDatabaseId`, `body`, `state`, `submittedAt`, `updatedAt`,
    `includesCreatedEdit`, `lastEditedAt`, `viewerDidAuthor`, author login/type, and commit OID.
-   Read the complete snapshot twice and reject drift. Fetch current collaborator permission through
-   the repository permission endpoint, mapping only a real 404 to `NONE`; transport, JSON, GraphQL,
-   viewer-login, malformed response, or other status failures remain unavailable evidence.
+   Normalize only positive integers and canonical positive decimal strings in `fullDatabaseId` to
+   `int`; preserve `null` as `None`; booleans, floats, zero, negatives, and noncanonical strings
+   remain malformed candidate data. Read the complete normalized snapshot twice and reject drift.
+   Fetch current collaborator permission through the repository permission endpoint, mapping only a
+   real 404 to `NONE`; transport, JSON, GraphQL, viewer-login, malformed response, or other status
+   failures remain unavailable evidence.
 
 8. **Resolve before readiness and immediately before mutation.** Catch every adapter and resolver
    exception inside the closed merge job and classify it as
    `merge_authorization_unavailable`. Require the second immutable authorization value to equal the
-   first completely. A non-authorized result exits with its explicit status; identity drift exits as
+   first completely, including normalized database ID, actor permission, timestamps, edit fields,
+   and body digest. A non-authorized result exits with its explicit status; identity drift exits as
    `merge_authorization_changed`; neither reaches the merge call.
 
 9. **Make authorization a required capability.** Change the irreversible adapter signature to
-   require the immutable authorization object. Before issuing the request, validate its repository,
-   PR number, and head against the requested merge. A missing, wrong-type, or mismatched capability
-   returns a malformed result without performing network I/O. Keep a static test proving the job
-   runner is the only production caller.
+   require the immutable authorization object. Validate its runtime type plus repository, PR number,
+   and head against the requested merge before logging, dry-run handling, or transport. A missing,
+   wrong-type, or mismatched capability returns a malformed result without any observable mutation
+   attempt. Keep a static test proving the job runner is the only production caller. A process-local
+   HMAC adds no provenance because the same trusted process can construct values; the externally
+   sourced, fully bound frozen capability is the meaningful boundary.
 
 10. **Classify retry behavior explicitly.** `ABSENT`, `STALE`, `AMBIGUOUS`, `REPLAYED`, `REVOKED`,
     and `UNTRUSTED` are operator-correctable blocked outcomes and must preserve labels while making
@@ -185,7 +207,12 @@ gh pr review <N> \
 | Encode a user-supplied nonce or duplicate repository/PR/SHA in the body | A custom token attempted to establish creation identity | The nonce has no trusted creation record and duplicates identity GitHub already supplies through nesting and `commit.oid` | Use the native review record and one exact canonical marker |
 | Accept a canonical body after editing | An edited review currently matched the expected marker | Current text does not prove original creation content; editing destroys the intended creation-record semantics | Reject edit metadata even when the present body is canonical |
 | Let any marked review veto a valid operator | An automation actor, bot, or low-permission user added a second marker | Untrusted input could force ambiguity or denial after a trusted operator authorized the head | Ignore untrusted candidates when a trusted authorization exists |
-| Fetch only one page or one snapshot | The resolver classified the first 100 reviews from one read | Later pages can hide candidates or duplicate IDs, and a changing snapshot can mix incompatible states | Bound pagination, reject loops/truncation/duplicates, and compare two complete reads |
+| Fetch only one page or one snapshot | The resolver classified the first 100 reviews from one read | Later pages can hide candidates or duplicate IDs, and a changing snapshot can mix incompatible states | Bound pagination, reject cursor loops and truncation, preserve duplicate IDs for replay classification, and compare two complete reads |
+| Reject duplicate IDs during review traversal | The transport adapter enforced ID uniqueness before returning a snapshot | A duplicate is authorization evidence with a deterministic `REPLAYED` meaning, not malformed connection transport | Preserve duplicate nodes in each stable snapshot and let the pure resolver classify them |
+| Accept `MAINTAIN` as a collaborator-permission response | The trust predicate modeled repository roles rather than the endpoint's legacy `permission` field | GitHub maps maintain to `write`; accepting a separate value widens the parser beyond its documented wire contract | Accept only `NONE`, `READ`, `WRITE`, and `ADMIN`; trust only `WRITE` and `ADMIN` |
+| Coerce every integer-like database ID | Boolean, float, zero, negative, or padded/signed decimal values were accepted as review identities | Python coercion erases malformed service data and can make unstable identities appear canonical | Normalize only positive integers and canonical positive decimal strings; retain `null` and classify all other candidate forms as replayed after provenance is established |
+| Collapse malformed candidates into unavailable transport | Any bad marked-review field raised before candidate resolution | A trusted current-head artifact with malformed authorization metadata is materially different from a broken repository/connection snapshot and must veto a valid sibling approval | Raise only when marker/provenance/head facts cannot be established; otherwise resolve the malformed trusted current-head candidate as `REPLAYED` |
+| Sign the capability inside the automation process | An HMAC was proposed to distinguish verified capability values from raw Python objects | The trusted process can construct both the value and signature, so the signature proves no external provenance | Use a frozen value bound to the externally sourced review and validate it at the sole irreversible adapter |
 | Treat the approval as a continuously revocable lease | The design implied dismissal could cancel a merge atomically at any instant | GitHub cannot condition a merge request on review ID/state, so dismissal can race after the final read | Document issuance-for-head semantics and the unavoidable post-read race |
 | Let adapter failures escape the worker | Pagination, viewer, permission, JSON, or GraphQL errors raised out of merge-wait | The queue recorded an unclassified worker failure and obscured whether a mutation was attempted | Catch and classify all authorization-read failures before the conditional PUT |
 | Pass raw review data to the merge adapter | Callers could invoke the irreversible method without a verified, head-bound proof | Validation was split across call sites and tests could not prove every mutation was guarded | Require and validate one immutable authorization capability at the adapter boundary |
@@ -198,11 +225,15 @@ gh pr review <N> \
 | Body identity | SHA-256 digest of the exact canonical marker body |
 | Native state | `APPROVED` for active authorization; dismissed current-head markers classify as revoked when no active trusted approval exists |
 | Head binding | Review `commit.oid` equals the live reviewed head SHA |
-| Trusted actor | Human, distinct from automation viewer, with current `WRITE`, `MAINTAIN`, or `ADMIN` permission |
+| Trusted actor | GitHub `User`, `viewerDidAuthor=false`, distinct case-insensitively from the automation viewer, login without `[bot]`, and current legacy `WRITE` or `ADMIN` permission |
+| Human-operated assumption | API provenance cannot prove a `User` account is not machine-operated; repository administrators own trusted access and identity separation |
+| Review database ID | `fullDatabaseId`: positive `int` or canonical positive decimal string normalizes to `int`; `null` remains `None`; all other forms are malformed |
 | Edit policy | `includesCreatedEdit` must be false and `lastEditedAt` must be null |
 | Authorized cardinality | Exactly one active trusted current-head marked approval |
-| Stable read | Two complete bounded paginated snapshots compare equal |
-| Capability identity | Repository, PR, head, node/database IDs, author, submitted/updated timestamps, and body digest |
+| Stable read | Two complete normalized bounded paginated snapshots compare equal; duplicate IDs remain present |
+| Capability identity | Repository, PR, head, node/normalized database IDs, author and permission, submitted/updated timestamps, edit fields, and body digest |
+| Unavailable boundary | Transport/JSON/GraphQL, repository/PR/connection/page identity, cursor/truncation/count/drift, viewer/permission, or provenance-establishment failure raises |
+| Replayed boundary | Once marker, trusted actor, and current head are established, malformed authorization metadata—including duplicate IDs—resolves as `REPLAYED` |
 | Admission reads | Once before readiness wait and once immediately before the merge request |
 | Merge precondition | Conditional request includes the verified head SHA and receives the matching capability |
 | Blocked statuses | `absent`, `stale`, `ambiguous`, `replayed`, `revoked`, `untrusted` |
@@ -235,7 +266,11 @@ Required behavioral assertions include:
 - no conditional PUT for absent, stale, ambiguous, replayed, revoked, untrusted, unavailable, or
   changed authorization;
 - a mismatched capability produces no GitHub call;
-- duplicate IDs, cursor loops, truncation, malformed pages, and snapshot drift fail closed;
+- duplicate IDs reach the resolver and classify as replayed, while cursor loops, truncation,
+  malformed envelopes, and snapshot drift classify as unavailable;
+- malformed trusted current-head metadata classifies as replayed even beside a valid approval;
+- `fullDatabaseId` normalization accepts only positive integers, canonical positive decimal
+  strings, and null;
 - same-review same-head restart reuse succeeds only after fresh automated review proof;
 - the same review becomes stale after a head change;
 - production has one capability-bearing conditional-merge call site and no native auto-merge
