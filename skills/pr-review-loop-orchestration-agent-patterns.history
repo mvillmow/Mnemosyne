@@ -4,6 +4,31 @@
 
 This file preserves the full original content of the skills merged into this canonical.
 
+## v1.11.0 (2026-08-08)
+
+**Changed by:** Verified automation-loop review and merge-path audit.
+**Verification:** verified-ci.
+
+### What changed
+
+- Added the final audit ordering: immutable head, loop-owned GO state, required-check gate, and
+  terminal merge event.
+- Distinguished comment-only review records and wrapper test notes from merge authorization.
+- Added the requiredness rule for path-gated non-required jobs that report `SKIPPED`.
+
+### Why
+
+A completed run can have informational review records, a wrapper note that says tests were not
+run, and skipped optional jobs without violating the repository's required merge contract. The
+audit must classify each status by requiredness and use the aggregate gate plus terminal merge event
+instead of treating any single status or prose field as authoritative.
+
+### Previous version (v1.10.0 snapshot)
+
+The exact v1.10.0 source is preserved in the parent Git commit.
+
+---
+
 ## v1.10.0 (2026-08-04)
 
 **Changed by:** ProjectHephaestus issue #2626 / PR #2627 automation-loop review and merge.
