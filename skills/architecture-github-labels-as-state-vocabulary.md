@@ -1,9 +1,9 @@
 ---
 name: architecture-github-labels-as-state-vocabulary
-description: "Use mutually-exclusive `state:*` GitHub labels as the single source of truth for pipeline state, with deterministic disjoint mutations and exclusive fail-closed reads. Use when: (1) automation gates work on fragile free-text verdicts, (2) multiple components must read one durable GitHub state signal identically, (3) state swaps must remain one canonical `gh issue edit`, (4) duplicate, shuffled, or contradictory labels must not change decisions, (5) post-mutation confirmation and retries must fail closed without compensating writes."
+description: "Use mutually-exclusive `state:*` GitHub labels as the single source of truth for pipeline state, with deterministic disjoint mutations and strict fail-closed reads. Use when: (1) automation gates work on fragile free-text verdicts, (2) multiple components must read one durable GitHub state signal identically, (3) state swaps must remain one canonical `gh issue edit`, (4) duplicate, shuffled, malformed, unavailable, or contradictory labels must not authorize progress, (5) batched GraphQL reads need an unavailable sentinel plus strict per-item fallback, (6) post-mutation confirmation and retries must fail closed without compensating writes."
 category: architecture
-date: 2026-08-06
-version: "1.3.1"
+date: 2026-08-07
+version: "1.4.0"
 user-invocable: false
 verification: verified-local
 history: architecture-github-labels-as-state-vocabulary.history
@@ -35,6 +35,11 @@ tags:
   - fail-closed-readback
   - exclusive-state-reader
   - idempotent-retry
+  - strict-label-payload
+  - graphql-unavailable-sentinel
+  - rest-fallback
+  - tri-state-cache
+  - authorization-read
 ---
 
 # Architecture: GitHub Labels as State Vocabulary (Not Free-Text Comments)
@@ -43,10 +48,10 @@ tags:
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-08-06 |
+| **Date** | 2026-08-07 |
 | **Objective** | Replace fragile regex-parsing of free-text comment bodies (e.g. `Verdict: GO/NOGO`) with mutually-exclusive `state:*` GitHub labels as the single source of truth for per-issue pipeline state — eliminates "comment unparseable → issue permanently stuck" and "planner and implementer disagree → infinite loop" failure modes |
 | **Outcome** | Pattern executed end-to-end on 2026-05-29 in HomericIntelligence/ProjectHephaestus PR #707; 911 automation tests pass locally, ruff + mypy clean. Three labels (`state:needs-plan`, `state:plan-no-go`, `state:plan-go`) defined, idempotent provisioner CLI shipped, `issues:opened` workflow auto-tags new issues, reviewer applies-and-removes opposites, implementer trusts the terminal label absolutely. One-time comment-scan backfill self-heals legacy issues. |
-| **Verification** | verified-local — the original label-state pattern passed 911 automation tests plus ruff and mypy locally in ProjectHephaestus PR #707. **The v1.1.0 through v1.3.0 additions are design-stage / unverified**: the re-plan edge, atomic-swap refinement, deterministic normalization, exclusive readers, readback ownership, and retry recovery are specified but were not implemented or executed in the session that captured them. |
+| **Verification** | verified-local — the original label-state pattern passed 911 automation tests plus ruff and mypy locally in ProjectHephaestus PR #707. **The v1.1.0 through v1.4.0 additions are design-stage / unverified**: the re-plan edge, atomic-swap refinement, deterministic normalization, strict payload parsing, GraphQL unavailable sentinels, per-issue fallback, exclusive readers, readback ownership, and retry recovery are specified but were not implemented or executed in the sessions that captured them. |
 | **Live observation that motivated this** | 320 "no parseable Verdict" WARNINGs across an org-wide automation run, plus wasteful re-planning of already-approved issues because the latest comment's verdict line had drifted from the regex contract |
 
 ## When to Use
@@ -65,6 +70,9 @@ tags:
 - Equivalent label mutations produce different argv, dry-run diagnostics, or logs because callers supply duplicates or permutations. Canonicalize once, before provisioning, logging, or transport.
 - A reader reports GO merely because the GO label is present, even when NO-GO is also present. Interpret each state family as a set and accept only an exact singleton; contradictory or malformed reads fail closed.
 - A state writer returns success immediately after `gh issue edit`. The transition owner must perform a fresh exclusive readback, while generic label helpers remain state-family agnostic.
+- A batched GraphQL label fetch maps missing aliases, malformed nodes, or response errors to `[]`, making unavailable state indistinguishable from a successfully read empty collection and preventing a strict per-item fallback.
+- A `check=False` GitHub call is parsed without checking its return code, or a label parser silently ignores malformed siblings in an otherwise plausible payload. Authorization must reject the entire read.
+- Tests or compatibility callers can inject raw issue payloads behind an adapter. Every authoritative gate and post-mutation confirmation must re-parse that payload strictly at its own boundary.
 
 **Don't use when:**
 
@@ -184,6 +192,15 @@ done
     - Provisioning is an idempotent prerequisite, not part of a rollback protocol. If provisioning succeeds but mutation or readback fails, propagate the exception and issue no compensating add/remove writes. Retry the identical canonical atomic swap and readback; this reconciles absent, successful-but-unconfirmed, and contradictory outcomes.
     - Test at three seams: pure normalization/exclusivity, command construction and dry-run diagnostics, and transition-owner mutation/readback/retry. Include duplicate and reversed inputs, pre-I/O overlap rejection, one-edit assertions, contradictory label sets, malformed reads, mutation exceptions, and failed-readback retry.
 
+11. **Preserve unavailable versus successfully empty label state** *(v1.4.0, proposed and unverified)*:
+    - Define one strict payload parser beside the label vocabulary. A valid payload is an object whose `labels` value is a list containing only objects with a non-empty string `name`. Collapse duplicate names into a set, but reject mixed strings/dictionaries, missing collections, malformed nodes, and empty names as a whole; never discard only the bad siblings.
+    - At every `check=False` CLI boundary, require `returncode == 0` before decoding JSON. Transport failure, invalid JSON, and invalid payload shape are unavailable state, not an empty successful read and never authorization.
+    - Model batched reads with three meanings: a label list is successful state (including `[]` for a confirmed empty collection), `None` is unavailable or malformed state, and absence of an issue key is also unavailable. Initialize every requested issue to `None`; populate only aliases whose repository, issue, label connection, nodes, and nodes' names all validate.
+    - When a planner receives `None` from the batch, perform one independent strict per-issue REST read. Only a successful exclusive `state:plan-go` result may skip planning. If the fallback fails or remains malformed, retain `None`, keep the issue eligible for work, and do not convert uncertainty into GO or a durable empty cache entry.
+    - Make plan and implementation predicates symmetric. GO and NO-GO each require that their own label be the exact singleton active label in the family. A contradictory pair returns neither flag, regardless of payload order.
+    - Re-parse raw payloads at authorization and transition-confirmation boundaries even when a production adapter normally validates them. This protects against compatibility callers and test doubles bypassing the adapter and keeps every writer's one-edit/one-readback contract locally enforceable.
+    - Exercise all mutation owners, not only the shared helper. Standalone plan review, planning-stage re-entry, plan-review verdicts, ambient implementation markers, and repo-scoped implementation markers must each prove exactly one combined edit followed by exactly one fresh exclusive read. Malformed or contradictory confirmation must raise or retry without advancing.
+
 ## Failed Attempts
 
 | Attempt | What Was Tried | Why It Failed | Lesson Learned |
@@ -202,6 +219,10 @@ done
 | 12 *(design-stage, unverified)* | Testing approval with membership (`GO in labels`) or extracting the first matching `state:*` label from an ordered payload. | GO+NO-GO could be interpreted as GO, and shuffled API payloads could change the selected state. The durable journal became order-dependent and contradictory state could authorize progress. | Convert payloads to sets and require exact singleton equality for each exclusive family. Contradiction, absence, malformed payload, and read failure must all fail closed. |
 | 13 *(design-stage, unverified)* | Letting a state-marking helper return after mutation without a fresh readback, or letting both ambient and repo-scoped layers confirm independently. | An unknown mutation outcome could be reported as success; duplicate confirmation blurred ownership and introduced extra reads with potentially different repository scope. | The transition owner performs one atomic edit plus one fresh exclusive readback. Repo-scoped and ambient paths each have one owner; ambient adapters delegate completely. |
 | 14 *(design-stage, unverified)* | Issuing compensating label writes after a provisioned edit or readback failure. | The original write may actually have succeeded, so compensation creates more uncertain states and breaks the one-command swap guarantee. | Propagate failure without rollback. Retrying the same canonical atomic swap is idempotent and reconciles the state, then confirms it with a fresh exclusive read. |
+| 15 *(design-stage, unverified)* | Parsing labels with a permissive comprehension that keeps valid dictionaries while silently dropping malformed siblings. | A payload containing GO plus one malformed node looked identical to a clean GO payload and could authorize progress from incomplete evidence. | Validate the entire collection first. One malformed node invalidates the read; duplicate valid names may still collapse into a set. |
+| 16 *(design-stage, unverified)* | Initializing every batched GraphQL issue result to `[]` and leaving that default on missing aliases, GraphQL errors, malformed repositories, or invalid label nodes. | The cache could not distinguish "successfully read no labels" from "labels unavailable," so callers could suppress fallback or treat missing evidence as durable state. | Use `None` for unavailable and reserve `[]` exclusively for a successfully read empty label collection; retry `None` through a strict per-issue boundary before authorizing. |
+| 17 *(design-stage, unverified)* | Decoding output from a `check=False` GitHub command without first checking the exit status. | Stale, partial, or empty stdout from a failed command could be interpreted as a real empty label set. | Check status before JSON parsing. Nonzero status is unavailable state and cannot authorize any transition. |
+| 18 *(design-stage, unverified)* | Assuming the GitHub adapter made every downstream confirmation strict, including test doubles and compatibility paths that returned raw payloads. | A writer could accept a permissively shaped readback in tests or alternate integrations and advance without proving the exclusive durable state. | Parse again at every authoritative gate and post-mutation confirmation boundary; adapter validation and gate validation defend different seams. |
 
 ## Results & Parameters
 
@@ -439,6 +460,80 @@ def mark_state(
 On mutation or readback failure, do not issue a compensating write. Retry
 `mark_state(...)`; it replays the same canonical, idempotent swap and readback.
 
+### Proposed Strict Payload and Batched-Fallback Pattern
+
+*Design-stage in v1.4.0 — not yet implemented or locally/CI verified.*
+
+```python
+def label_names_from_payload(payload: object) -> set[str] | None:
+    """Return unique label names, or None when any payload node is malformed."""
+    if not isinstance(payload, dict):
+        return None
+    raw_labels = payload.get("labels")
+    if not isinstance(raw_labels, list):
+        return None
+
+    names: set[str] = set()
+    for raw_label in raw_labels:
+        if not isinstance(raw_label, dict):
+            return None
+        name = raw_label.get("name")
+        if not isinstance(name, str) or not name:
+            return None
+        names.add(name)
+    return names
+```
+
+For batched GraphQL reads, preserve a per-issue unavailable sentinel instead of
+defaulting uncertainty to an empty successful read:
+
+```python
+def fetch_label_batch(issue_numbers: list[int]) -> dict[int, list[str] | None]:
+    results: dict[int, list[str] | None] = {
+        number: None for number in issue_numbers
+    }
+    payload = fetch_graphql_payload()  # transport and JSON errors leave None
+    repository = require_repository_object_without_graphql_errors(payload)
+
+    for index, number in enumerate(issue_numbers):
+        issue = repository.get(f"issue{index}")
+        if not isinstance(issue, dict):
+            continue
+        labels = issue.get("labels")
+        if not isinstance(labels, dict) or "nodes" not in labels:
+            continue
+        names = label_names_from_payload({"labels": labels["nodes"]})
+        if names is not None:
+            results[number] = sorted(names)  # [] means confirmed empty
+    return results
+```
+
+The authorization consumer retries only unavailable entries and skips work only
+after a successful exclusive read:
+
+```python
+labels = batch_cache.get(issue_number)
+if labels is None:
+    labels = strict_rest_fallback(issue_number)  # list[str] | None
+    batch_cache[issue_number] = labels
+
+if labels is not None and is_exclusive_plan_go(labels):
+    skip_issue()
+else:
+    keep_issue_eligible()
+```
+
+Authorization matrix:
+
+| Observation | Stored value | May authorize GO? | Next action |
+|-------------|--------------|-------------------|-------------|
+| Successful empty collection | `[]` | No | Continue normal non-GO flow |
+| Successful sole GO label | `[GO]` | Yes | Apply the exclusive predicate |
+| GO plus NO-GO | Both names | No | Fail closed as contradictory |
+| Mixed valid/malformed nodes | `None` | No | Strict per-item fallback or error |
+| Missing alias/collection | `None` | No | Strict per-item fallback or error |
+| Nonzero CLI/GraphQL/JSON failure | `None` | No | Propagate, retry, or keep work eligible |
+
 ### Shared-Gate Read (Planner + Implementer Agree and Fail Closed)
 
 ```python
@@ -590,3 +685,4 @@ grep -rn "add.label state:needs-plan\|--add-label state:needs-plan\|STATE_NEEDS_
 | ProjectHephaestus | Issue #1857 — re-plan cycle deadlock (Failed Attempt #9) — **design-stage, UNVERIFIED for this specific learning** | Planning→plan_review re-plan cycle could never converge: `plan_review` applies `state:plan-no-go` and FAIL_BACKs to `planning`; `planning` re-plans but the labels-first VERIFY gate (`has_existing_plan` → `is_plan_review_go`) stays False while `state:plan-no-go` is set, so VERIFY RETRYs until the `plan` budget (2) drains → FINISH_FAIL; the intended `plan_cycles=2` second cycle is unreachable. Root cause: the documented `no-go → needs-plan` re-plan edge is never executed by any component. Fix designed (pure `replan_transition()` helper + atomic add/remove in planning `on_enter`, guarded for idempotency) and unit-test-specified, but **NOT yet implemented or CI-verified in this session.** |
 | ProjectHephaestus | Issue #1857 — atomic-swap refinement (Failed Attempt #10) — **design-stage, UNVERIFIED; a plan-review NOGO forced this** | A plan reviewer NOGO'd two naive versions of the Attempt-#9 fix: **(a)** a bare `add_labels([needs-plan])` that left `state:plan-no-go` present (two labels at once → mutually-exclusive-invariant violation, gate still stuck-False); **(b)** the swap emitted as two separate mutator calls because the GitHub accessor exposed only `add_labels` / `remove_labels`, leaving a zero-or-two-label crash window. Refined fix: `replan_transition() -> (add=[needs-plan], remove=[plan-no-go, plan-go])` (SWAP, remove BOTH siblings) applied via a NEW combined `edit_labels(add, remove)` primitive that maps onto a SINGLE `gh issue edit`, with all `state:*` transitions routed through it. Designed + unit-test-specified, **NOT implemented or CI-verified.** |
 | ProjectHephaestus | Deterministic label mutation and exclusive implementation-state plan — **design-stage, UNVERIFIED** | Proposed one normalization authority for sorted, de-duplicated, disjoint add/remove sets; set-based exact-singleton plan and implementation readers; one-command GO/NO-GO swaps with explicitly owned fresh readback; and retry-without-compensation recovery. Acceptance tests were specified for canonical argv/logs, pre-I/O overlap rejection, contradictory reads, one-edit transitions, and failure reconciliation, but no implementation or tests were executed in this learning session. |
+| ProjectHephaestus | Strict label-read and batched-fallback revision plan — **design-stage, UNVERIFIED** | Proposed whole-payload validation for ambient, repo-scoped, PR, and compatibility readers; `None` versus `[]` GraphQL results; strict per-issue REST fallback; symmetric exclusive plan/implementation predicates; and one-edit/one-readback regressions for every transition owner. The implementation and acceptance commands were fully specified, but no code or tests were executed in this learning session. |
