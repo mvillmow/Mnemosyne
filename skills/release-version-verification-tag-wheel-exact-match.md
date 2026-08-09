@@ -345,22 +345,22 @@ def bump_version(
 
 10. **Protect ordering and immutability with executable tests.** Cover the behavior, not internal calls:
 
-   - aggregate manager update rejects a dynamic project before touching a seeded manifest,
-     `VERSION`, or configured package `__init__.py`;
-   - normal and `--dry-run` CLI invocations return nonzero for a dynamic project, emit no success
-     stdout, provide the signed-release path on stderr, and never call canonical lookup;
-   - `--json` and `--json --dry-run` return nonzero and produce one parseable error document on
-     stdout without creating an absent `VERSION` file;
-   - static-project JSON dry-run remains successful and produces one parseable status document,
-     with no `Would bump version` prefix;
-   - existing static/no-manifest aggregate-update tests remain green;
-   - exact success when canonical and installed values both equal the request;
-   - failure when either source is missing or differs;
-   - failure for development/local installed versions such as `1.2.3.dev1` when `1.2.3` was requested;
-   - byte-for-byte preservation of `VERSION`, `pyproject.toml`, package `__init__.py`, and any other sentinel file;
-   - no filesystem entries created by a refused dynamic-project operation;
-   - the installed-wheel verification step appears after build and before publish;
-   - the verification command comes from `build/version-verify`, includes `--expected-version`, and fails when no wheel exists.
+    - aggregate manager update rejects a dynamic project before touching a seeded manifest,
+      `VERSION`, or configured package `__init__.py`;
+    - normal and `--dry-run` CLI invocations return nonzero for a dynamic project, emit no success
+      stdout, provide the signed-release path on stderr, and never call canonical lookup;
+    - `--json` and `--json --dry-run` return nonzero and produce one parseable error document on
+      stdout without creating an absent `VERSION` file;
+    - static-project JSON dry-run remains successful and produces one parseable status document,
+      with no `Would bump version` prefix;
+    - existing static/no-manifest aggregate-update tests remain green;
+    - exact success when canonical and installed values both equal the request;
+    - failure when either source is missing or differs;
+    - failure for development/local installed versions such as `1.2.3.dev1` when `1.2.3` was requested;
+    - byte-for-byte preservation of `VERSION`, `pyproject.toml`, package `__init__.py`, and any other sentinel file;
+    - no filesystem entries created by a refused dynamic-project operation;
+    - the installed-wheel verification step appears after build and before publish;
+    - the verification command comes from `build/version-verify`, includes `--expected-version`, and fails when no wheel exists.
 
 11. **Retain the source/build computation gate.** A pre-build check such as `TAG_VERSION == hatchling version` and the post-build installed-wheel check prove different things. Keep both: the first verifies VCS-derived build computation; the second verifies the actual artifact consumer before publication.
 
