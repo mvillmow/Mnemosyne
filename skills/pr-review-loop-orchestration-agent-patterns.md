@@ -3,7 +3,7 @@ name: pr-review-loop-orchestration-agent-patterns
 description: "Use when: (1) building or debugging a Python implement-review loop where an LLM sub-agent reviews a PR and a fixer agent addresses inline comments, (2) a review loop resolves threads even though no commit was produced — resolution must be gated on a real commit not the model self-report, (3) a loop ends AMBIGUOUS or NO-GO too fast before ever earning an explicit GO verdict, (4) LLM or agent-generated inline PR review comments are rejected by GitHub (HTTP 422) because they do not lie on a changed diff hunk, (5) an agent-driven CI-fix session produces no commit and the PR stays red; the correct response is a single bounded retry with unresolved review threads injected verbatim, (6) a review fix plan file concludes no changes are needed and the automation should self-cancel without opening a new PR, (7) a feature-dev:code-reviewer sub-agent cannot execute shell commands and cannot post gh pr review — wrong agent type was chosen, (8) a GitHub GraphQL PR-review mutation field selection is wrong and the automation loop fails on every call with Field X does not exist, (9) pre-commit must cover the full PR diff from the merge-base not just the most-recent-edit files before pushing, (10) an existing-PR review handler short-circuits NO-GO PRs as if they were settled (idempotency `if has_go or has_no_go: skip`) so a failed-review PR never re-enters the loop — short-circuit on GO ONLY, (11) an existing-PR worktree sync fails `git fetch origin {issue}-auto-impl` with exit 128 because the PR head branch was ASSUMED from the issue number instead of read from the PR's real `headRefName`, (12) an in-loop LLM PR reviewer posts a FALSE policy violation (e.g. `POLICY VIOLATION: Closes, auto-merge-premature, signed-commits` on a PR that actually has `Closes #N`, auto-merge OFF, and a signed commit) because its policy fetch failed open to violation, or you are tempted to make the reviewer re-check `Closes #N` / signed commits / auto-merge that a CI gate (`pr-policy` required, `auto-merge-policy` advisory) already enforces, (13) an in-loop implementer review cycle (`_run_impl_review_loop`) converges/`break`s when the reviewer posts zero threads even though the verdict is AMBIGUOUS or NO-GO, or applies `state:skip` after a single iteration-0 non-GO instead of re-reviewing up to `MAX_REVIEW_ITERATIONS` and auto-skipping only on TRUE exhaustion, (14) the address-review coordinator is handed a review thread the reviewer itself labels non-blocking / pre-existing / out-of-scope / follow-up-worthy, or that asks for an edit the approved plan explicitly scoped out (e.g. behind a 'count must not increase' verification guard) — the correct disposition is to leave the thread UNADDRESSED (out of the `addressed` set) as a follow-up issue and make NO code change, because resolving a comment means giving it a disposition, not necessarily editing code, (15) a run parks EVERY pr_review item to state:skip via 'zero-thread NOGO retry cap exhausted' or 'exhausted at round N (automation unresolved 0 -> 0)' and you suspect the reviewer model or verdict parsing — check each PR's hephaestus-pr-review-zero-thread-nogo anomaly comment FIRST: a summary like 'NOGO: ... head unchanged (Nth round)' means by-design stale-PR triage (#2079: deterministic no-progress NOGOs escalate to skip instead of burning implement budget), NOT a reviewer failure; only a FRESHLY-implemented PR parked this way indicates a real defect, (16) a review audit must collect every review-thread and nested comment page before deciding that no blocking evidence exists, (17) a queue merge must rebind the reviewed head before a normal conditional merge, (18) review must inspect the original branch-point snapshot before any post-review rebase, (19) behind/conflicting post-review heads must re-enter through a host-owned bounded rebase path, and (20) duplicate plan publishers must be ejected as benign terminal outcomes rather than poisoning a completed run"
 category: ci-cd
 date: 2026-08-08
-version: "1.11.0"
+version: "1.12.0"
 verification: verified-ci
 user-invocable: false
 history: pr-review-loop-orchestration-agent-patterns.history
@@ -47,6 +47,10 @@ tags:
   - loop-termination-condition
   - state-skip-on-exhaustion
   - max-review-iterations
+  - review-iteration-budget
+  - review-budget-cli
+  - reseed-vs-review
+  - exact-review-cap
   - out-of-scope-thread-disposition
   - non-blocking-review-thread
   - resolve-is-not-edit
@@ -78,10 +82,10 @@ tags:
 | Field | Value |
 |-------|-------|
 | **Date** | 2026-08-08 |
-| **Objective** | Build and debug a Python implement-review loop that drives LLM sub-agents to review a PR and fix its inline comments, converging on an EVIDENCE-BASED `Verdict: GO`. Covers commit-gated thread resolution, complete pagination of review-thread and nested comment connections, head-bound review handoffs, and the queue's normal conditional merge path. |
-| **Outcome** | Merged across multiple ProjectHephaestus PRs, including issue #2390 / PR #2671, issue #2371 / PR #2652, and issue #2711 / PR #2712. PR #2652 verified that multiple head-bound `COMMENTED` review records remain informational until the final head receives loop-owned GO; the generated “Testing: Not run” body note did not override live required checks or the normal conditional merge path. PR #2712 verified branch-point review snapshots, benign duplicate-plan ejection, and host-owned post-review rebase/conflict recovery before the normal reviewed-head merge path. |
+| **Objective** | Build and debug a Python implement-review loop that drives LLM sub-agents to review a PR and fix its inline comments, converging on an EVIDENCE-BASED `Verdict: GO`. Covers commit-gated thread resolution, complete pagination of review-thread and nested comment connections, head-bound review handoffs, an explicit review-budget CLI separate from repository reseeding, and the queue's normal conditional merge path. |
+| **Outcome** | Merged across multiple ProjectHephaestus PRs, including issue #2390 / PR #2671, issue #2371 / PR #2652, issue #2711 / PR #2712, and issue #2714 / PR #2715. PR #2652 verified that multiple head-bound `COMMENTED` review records remain informational until the final head receives loop-owned GO; the generated “Testing: Not run” body note did not override live required checks or the normal conditional merge path. PR #2712 verified branch-point review snapshots, benign duplicate-plan ejection, and host-owned post-review rebase/conflict recovery before the normal reviewed-head merge path. PR #2715 verified that `--review-iterations N` maps one positive operator value to `plan_review_iter`, `pr_review_iter`, and `pr_review_hard`, while omission preserves the 3/3/6 routing defaults and `--loops` remains repository-discovery-only; its live merge audit showed loop-owned GO before the required-check gate, native auto-merge unset, and one non-required analysis failure distinct from the passing required checks. |
 | **Verification** | verified-ci |
-| **Version** | 1.11.0 |
+| **Version** | 1.12.0 |
 
 ## When to Use
 
@@ -102,6 +106,7 @@ tags:
 - A completed queue run has a major inline finding, a later head-bound implementation reply, and a merge event; audit the current head, exclusive GO/NO-GO label transition, required checks, and merge commit in that order.
 - A review audit queries GitHub GraphQL connections for `reviewThreads` or nested `comments`; paginate both levels before concluding that no blocking evidence exists.
 - A queue has reached GO and must hand off to `merge_wait`; rebind the live PR head and merge conditionally by the reviewed SHA rather than treating review prose, CI, or a label as merge authority.
+- An operator needs to increase or decrease plan/implementation review rounds without accidentally changing repository discovery reseeding, or a completed run must distinguish a failed non-required check from the required merge contract.
 
 ## Verified Workflow
 
@@ -149,6 +154,42 @@ Need to write back (post review / create issue / commit / push)?
   YES -> general-purpose         (has Bash/Edit/Write; prompt includes the gh command)
   NO  -> feature-dev:code-reviewer (read-only; forbid gh syntax, return VERDICT + BODY)
 ```
+
+#### Explicit review budget and merge handoff: issue #2714 / PR #2715
+
+Keep the two operator controls independent:
+
+```bash
+# Repository discovery reseed passes only; does not change review budgets.
+uv run hephaestus-automation-loop --loops 5
+
+# Exact positive cap for plan review, implementation review, and the PR hard cap.
+uv run hephaestus-automation-loop --review-iterations 10
+```
+
+The configuration contract is:
+
+```python
+budget_overrides = {"merge": drive_green_loops}
+if review_iterations is not None:
+    budget_overrides.update(
+        {
+            "plan_review_iter": review_iterations,
+            "pr_review_iter": review_iterations,
+            "pr_review_hard": review_iterations,
+        }
+    )
+# When omitted, the routing table retains plan=3, implementation soft=3, hard=6.
+```
+
+For the completed merge path, audit the live facts in order: final head, review/thread
+surface (which may intentionally be empty), exclusive loop-owned `state:implementation-go`,
+required checks from the repository's protection contract, then the merge event and
+`autoMergeRequest`. PR #2715 had no GitHub review or comment object; its GO label preceded
+the required-check gate, the three protected checks passed, one non-required
+`Analyze (javascript-typescript)` check failed, and the PR still merged normally with
+`autoMergeRequest: null`. A GO label is not a substitute for reviewed-head proof: if any
+commit lands after authorization, rebind the head and review it again before merge.
 
 ### Detailed Steps
 
@@ -665,6 +706,8 @@ recurring traps:
 | Read only the first page of review-thread or comment connections | Accepted an empty first page as proof that the PR had no later review evidence | GitHub GraphQL connections are paginated; later threads or comments can contain the finding or reply needed for a correct disposition | Traverse every page of both `reviewThreads` and each thread's `comments` before review, reconciliation, or GO authorization (issue #2390 / PR #2671) |
 | Edit the redirect target's content because the anchor was correct | Saw a correct pointer to `CONTRIBUTING.md` / `README.md` and assumed the doc itself was THIS PR's defect to fix | A correct anchor to a doc whose downstream step is buggy is not a defect introduced by this PR; the reviewer themselves recommended a follow-up issue, not an in-PR fix | Distinguish the redirect/anchor (often correct) from the redirect target's content (the actual, out-of-scope complaint); honor the scope contract and emit `{"addressed": []}` (verified-local). |
 | Treat the generated PR-body testing note as live CI evidence | PR #2652 said `Testing: Not run by the automation pipeline` even though the required checks and `required-checks-gate` later succeeded | The body text described what the implementation wrapper ran, not the repository's current merge-contract checks | Read live required checks and the gate separately; keep CI as merge readiness evidence, not as the loop's review verdict |
+| Reuse `--loops` as the review-budget control | The CLI exposed only `--loops`, whose meaning is repository-discovery reseeding; using it to tune plan/implementation review rounds conflated two unrelated budgets | Operators could not request a larger review budget without changing code, and the default review caps were easy to misrepresent | Add a positive `--review-iterations N` option; map it exactly to `plan_review_iter`, `pr_review_iter`, and `pr_review_hard`, while leaving `--loops` discovery-only (issue #2714 / PR #2715) |
+| Treat every failed check in the rollup as a merge blocker | PR #2715 had a failed non-required `Analyze (javascript-typescript)` check while the protected unit, integration, and `required-checks-gate` checks passed | The repository's merge contract is the protected required set, not an undifferentiated rollup; the PR merged with native auto-merge unset | Query the target branch's required checks and audit the loop-owned GO → required-check gate → merge event sequence; classify advisory failures separately |
 
 ## Results & Parameters
 
@@ -679,6 +722,7 @@ recurring traps:
 | Existing-PR short-circuit is GO-ONLY | `_review_existing_pr`: `if has_go: return` (NOT `has_go or has_no_go`) | a NO-GO label is NOT terminal; it must re-enter the loop (PR #1104) |
 | Existing-PR worktree uses the PR's real head branch | `get_pr_head_branch(pr)` → `headRefName`; fall back to `{issue}-auto-impl` only on `None` | the PR may have matched via `Closes #N`, so the head branch can differ from the issue number (PR #1106) |
 | Out-of-scope / non-blocking thread → resolve by NON-action | coordinator emits `{"addressed": []}`, dispatches ZERO sub-agents, commits nothing, leaves loop scratch file (`.claude-address-review-*.md`) UNTRACKED | "resolve" = give a disposition, not edit; editing a plan-scoped-out thread (e.g. behind a "count must not increase" guard) breaches the scope contract (verified-local, PR #1245 / #1216) |
+| Explicit review cap | `--review-iterations N` sets `plan_review_iter=N`, `pr_review_iter=N`, and `pr_review_hard=N`; omitted leaves only the merge budget override and preserves routing defaults | One operator knob controls both review families without repurposing repository reseeding | Positive, exact per-cycle review budget; `--loops` remains discovery-only (PR #2715) |
 
 ### Branch-point review and post-review rebase contract (verified-ci, PR #2712)
 
@@ -828,3 +872,4 @@ mutation {
 | ProjectHephaestus | Issue #2390 / PR #2671 (2026-08-06) | verified-ci; complete pagination of review-thread and nested comment connections, exclusive `state:implementation-go`, required checks green, reviewed head `5e16b5b6…`, and normal merge commit `ebde4269…` with `autoMergeRequest: null` |
 | ProjectHephaestus | Issue #2711 / PR #2712 (2026-08-08) | verified-ci; original branch-point review snapshot, four required review findings resolved on final head `c942cf78…`, restored-writer re-entry, independent conflict budget, host-owned signed/DCO/lease publication, remote-drift fresh-review guard, benign duplicate-plan ejection, required checks green, and normal merge commit `6dbd7e35…` with native auto-merge absent |
 | ProjectHephaestus | Issue #2371 / PR #2652 (2026-08-08) | verified-ci; initial NO-GO, multiple head-bound `COMMENTED` reviews, final reviewed head `f9ffbc05…`, exclusive GO/NOGO label transition, generated “Testing: Not run” note separated from live required checks, and normal merge commit `f3b2b4bf…` with `autoMergeRequest: null` |
+| ProjectHephaestus | Issue #2714 / PR #2715 (2026-08-08) | verified-ci; `--review-iterations` parser/config mapping, preserved 3/3/6 defaults, `--loops` kept discovery-only, 107 focused tests plus Ruff/mypy in the PR body, loop-owned GO before the required-check gate, no GitHub review/comment object, one non-required analysis failure separated from the protected checks, and normal merge commit `084dd2d3…` with `autoMergeRequest: null` |
